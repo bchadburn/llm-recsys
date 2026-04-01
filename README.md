@@ -80,7 +80,7 @@ The central idea is to keep the user and item encoders completely separate. They
 
 ## Data
 
-Generated entirely in `data.py` — no downloads needed.
+All data is generated in `data.py` at runtime — just run the script.
 
 **8 grocery categories:** produce, dairy, meat, bakery, beverages, snacks, frozen, cleaning
 

@@ -31,16 +31,17 @@ class UserTower(nn.Module):
 
 class ItemTower(nn.Module):
     """
-    Encodes a 13-dim item feature vector into a 64-dim L2-normalized embedding.
+    Encodes an item feature vector into a 64-dim L2-normalized embedding.
 
-    Layout of input features (13 floats):
+    Default input is a 384-dim sentence-transformer embedding
+    (all-MiniLM-L6-v2). Pass input_dim=13 to use the legacy one-hot features:
         [0:8]   category_onehot — one-hot for 8 grocery categories
         [8:11]  price_onehot    — one-hot: [budget, mid, premium]
         [11]    popularity      — log1p-normalized interaction count in [0, 1]
         [12]    avg_rating      — normalized rating in [0, 1]
     """
 
-    def __init__(self, input_dim: int = 13, embed_dim: int = 64):
+    def __init__(self, input_dim: int = 384, embed_dim: int = 64):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(input_dim, 64),

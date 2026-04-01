@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 import faiss
 
-from data import generate_data, InteractionDataset, CATEGORIES, PRICE_TIERS
+from data import generate_data, get_item_text_embeddings, InteractionDataset, CATEGORIES, PRICE_TIERS
 from model import UserTower, ItemTower
 
 # ── Hyperparameters ────────────────────────────────────────────────────────────
@@ -159,6 +159,57 @@ def run_inference(user_tower, index, user_features, items, user_archetypes):
             )
 
 
+# ── Side-by-side Comparison ────────────────────────────────────────────────────
+
+def compare_inference(user_tower_oh, index_oh, user_tower_te, index_te,
+                      user_features, items, user_archetypes):
+    """Print top-10 results for both approaches side by side for 3 demo users."""
+    archetype_labels = ['produce', 'snacks', 'cleaning']
+    demo_users = {}
+    for label in archetype_labels:
+        target_idx = CATEGORIES.index(label)
+        matches = np.where(user_archetypes == target_idx)[0]
+        if len(matches):
+            demo_users[label] = int(matches[0])
+
+    print("\n" + "=" * 94)
+    print("  SIDE-BY-SIDE: one-hot features (13d)  vs  text embeddings (384d)")
+    print("=" * 94)
+
+    for archetype, user_id in demo_users.items():
+        feat = torch.tensor(user_features[user_id]).unsqueeze(0)
+
+        user_tower_oh.eval()
+        with torch.no_grad():
+            emb_oh = user_tower_oh(feat).numpy().astype(np.float32)
+        faiss.normalize_L2(emb_oh)
+        scores_oh, idx_oh = index_oh.search(emb_oh, 10)
+
+        user_tower_te.eval()
+        with torch.no_grad():
+            emb_te = user_tower_te(feat).numpy().astype(np.float32)
+        faiss.normalize_L2(emb_te)
+        scores_te, idx_te = index_te.search(emb_te, 10)
+
+        prefs = user_features[user_id][8:16]
+        top_cats = sorted(range(len(CATEGORIES)), key=lambda i: -prefs[i])[:3]
+        cat_summary = "  |  ".join(f"{CATEGORIES[c]} ({prefs[c]*100:.0f}%)" for c in top_cats)
+
+        print(f"\n  User {user_id:3d}  [archetype: {archetype}]  —  {cat_summary}")
+        print()
+        print(f"  {'':4}  {'ONE-HOT (13d)':<44}  {'TEXT EMBEDDINGS (384d)':<44}")
+        print(f"  {'Rank':<4}  {'Item':<26} {'Category':<12} {'Score':<5}  "
+              f"{'Item':<26} {'Category':<12} {'Score':<5}")
+        print("  " + "-" * 92)
+        for rank in range(10):
+            a = items[idx_oh[0][rank]]
+            b = items[idx_te[0][rank]]
+            print(
+                f"  {rank+1:<4}  {a['name']:<26} {a['category']:<12} {scores_oh[0][rank]:.3f}  "
+                f"{b['name']:<26} {b['category']:<12} {scores_te[0][rank]:.3f}"
+            )
+
+
 # ── Production Notes ───────────────────────────────────────────────────────────
 
 PRODUCTION_NOTES = """
@@ -226,16 +277,26 @@ if __name__ == "__main__":
     )
     print(f"  User feature dim: {user_features.shape[1]}  |  Item feature dim: {item_features.shape[1]}")
 
-    # 2. Train towers
-    user_tower, item_tower = train(user_features, item_features, interactions)
+    # 2. Approach A: one-hot item features (13d)
+    print("\n--- Approach A: one-hot item features (13d) ---")
+    user_tower_oh, item_tower_oh = train(user_features, item_features, interactions)
+    print("\nBuilding FAISS index (one-hot)...")
+    index_oh = build_faiss_index(item_tower_oh, item_features)
+    print(f"  Index ready: {index_oh.ntotal} vectors, dim={EMBED_DIM}")
 
-    # 3. Build FAISS index
-    print("\nBuilding FAISS IndexFlatIP over all item embeddings...")
-    index = build_faiss_index(item_tower, item_features)
-    print(f"  Index ready: {index.ntotal} vectors, dim={EMBED_DIM}")
+    # 3. Approach B: sentence-transformer text embeddings (384d)
+    print("\n--- Approach B: text embeddings (384d, all-MiniLM-L6-v2) ---")
+    print("Loading sentence-transformer model and embedding items...")
+    item_text_embs = get_item_text_embeddings(items)
+    print(f"  Item text embeddings: {item_text_embs.shape}")
+    user_tower_te, item_tower_te = train(user_features, item_text_embs, interactions)
+    print("\nBuilding FAISS index (text embeddings)...")
+    index_te = build_faiss_index(item_tower_te, item_text_embs)
+    print(f"  Index ready: {index_te.ntotal} vectors, dim={EMBED_DIM}")
 
-    # 4. Retrieve top-10 for demo users
-    run_inference(user_tower, index, user_features, items, user_archetypes)
+    # 4. Side-by-side comparison
+    compare_inference(user_tower_oh, index_oh, user_tower_te, index_te,
+                      user_features, items, user_archetypes)
 
     # 5. Production notes
     print(PRODUCTION_NOTES)

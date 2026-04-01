@@ -166,6 +166,42 @@ def generate_data(n_users=500, n_items=200, n_interactions=5000, seed=42):
     return user_features, item_features, items, interactions, user_archetypes
 
 
+# ── Text Embeddings ────────────────────────────────────────────────────────────
+#
+# Cold-start problem: one-hot item features (category, price tier) are useless
+# for a brand-new item because they carry no information that distinguishes it
+# from the 24 other items in the same category. Every new "produce" item gets
+# the identical feature vector until interactions accumulate.
+#
+# Text embeddings solve this at the content level. all-MiniLM-L6-v2 has been
+# pre-trained on hundreds of millions of sentence pairs, so "Organic Spinach -
+# produce - budget quality" and "Baby Kale - produce - budget quality" land in
+# nearby but distinct positions in the 384-dim space — before a single user has
+# touched either item. A new item added to the catalog tonight can be embedded
+# and indexed immediately; no interactions required to make it retrievable.
+#
+# The trade-off: text embeddings encode what an item *is* (semantics), not what
+# kind of user *buys* it (collaborative signal). In practice you want both:
+# text embeddings for cold-start coverage, ID embeddings + interaction history
+# for warm items once they've accumulated enough signal.
+
+def get_item_text_embeddings(items):
+    """Embed each item as a sentence using all-MiniLM-L6-v2 (384d output).
+
+    Template: "{name} - {category} - {price_tier} quality"
+    e.g.    : "Organic Spinach - produce - budget quality"
+    """
+    from sentence_transformers import SentenceTransformer
+
+    model = SentenceTransformer('all-MiniLM-L6-v2')
+    texts = [
+        f"{it['name']} - {it['category']} - {PRICE_TIERS[it['price_tier']]} quality"
+        for it in items
+    ]
+    embeddings = model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
+    return embeddings.astype(np.float32)
+
+
 class InteractionDataset(Dataset):
     """Returns (user_feature_vector, item_feature_vector) pairs."""
 
