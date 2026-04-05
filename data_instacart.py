@@ -121,6 +121,102 @@ def _check_files(data_dir: Path) -> None:
         )
 
 
+# ── Temporal user-product features ────────────────────────────────────────────
+
+def _compute_temporal_up_features(op_f: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute temporal user-product features from interaction data.
+
+    Requires op_f to have columns: user_idx, item_idx, order_id,
+    order_number, days_since_prior_order.
+
+    Returns a DataFrame with columns:
+        user_idx, item_idx,
+        up_days_since_last_order,    — normalized to [0,1] by /30, clipped
+        up_orders_since_last_order,  — normalized by global max order count
+        up_order_streak,             — raw consecutive order count (normalize in caller)
+        up_order_rate                — orders_with_item / total_user_orders
+    """
+    # ── Order-level timeline (one row per order, not per item) ────────────────
+    order_tl = (
+        op_f[['user_idx', 'order_id', 'order_number', 'days_since_prior_order']]
+        .drop_duplicates('order_id')
+        .sort_values(['user_idx', 'order_number'])
+        .copy()
+    )
+    order_tl['days_since_prior_order'] = order_tl['days_since_prior_order'].fillna(0.0)
+    order_tl['cum_days'] = order_tl.groupby('user_idx')['days_since_prior_order'].cumsum()
+
+    user_max_cum_days  = order_tl.groupby('user_idx')['cum_days'].max()
+    user_max_order_num = order_tl.groupby('user_idx')['order_number'].max()
+
+    # ── Last order per (user, item) ───────────────────────────────────────────
+    up_last = (
+        op_f.groupby(['user_idx', 'item_idx'])['order_number']
+        .max()
+        .reset_index()
+        .rename(columns={'order_number': 'last_order_num'})
+    )
+    # Join cumulative days at the last purchase order
+    up_last = up_last.merge(
+        order_tl[['user_idx', 'order_number', 'cum_days']].rename(
+            columns={'order_number': 'last_order_num'}
+        ),
+        on=['user_idx', 'last_order_num'],
+        how='left',
+    )
+    up_last = up_last.merge(user_max_cum_days.rename('max_cum_days'), on='user_idx')
+    up_last = up_last.merge(user_max_order_num.rename('max_order_num'), on='user_idx')
+
+    max_orders_global = float(up_last['max_order_num'].max() or 1)
+
+    up_last['up_days_since_last_order'] = (
+        (up_last['max_cum_days'] - up_last['cum_days']).clip(lower=0) / 30.0
+    ).clip(upper=1.0).astype(np.float32)
+
+    up_last['up_orders_since_last_order'] = (
+        (up_last['max_order_num'] - up_last['last_order_num']) / max_orders_global
+    ).clip(0, 1).astype(np.float32)
+
+    # ── Order streak ──────────────────────────────────────────────────────────
+    # Streak = length of the consecutive tail of orders containing this item.
+    # e.g. orders [1,2,3] → streak 3; orders [1,3] → streak 1 (gap at 2).
+    ui_orders = op_f[['user_idx', 'item_idx', 'order_number']].drop_duplicates()
+    ui_orders = ui_orders.sort_values(['user_idx', 'item_idx', 'order_number'])
+    ui_orders['max_ui_order']  = ui_orders.groupby(['user_idx', 'item_idx'])['order_number'].transform('max')
+    ui_orders['gap_from_max']  = ui_orders['max_ui_order'] - ui_orders['order_number']
+    ui_orders['rank_from_end'] = ui_orders.groupby(['user_idx', 'item_idx']).cumcount(ascending=False)
+    ui_orders['in_streak']     = (ui_orders['gap_from_max'] == ui_orders['rank_from_end']).astype(np.int32)
+
+    up_streak = (
+        ui_orders[ui_orders['in_streak'] == 1]
+        .groupby(['user_idx', 'item_idx'])
+        .size()
+        .reset_index(name='up_order_streak')
+    )
+
+    # ── Order rate ────────────────────────────────────────────────────────────
+    # Fraction of user's orders that contain this item (uses order count not interaction count).
+    user_total_orders = op_f.groupby('user_idx')['order_number'].nunique()
+    up_order_rate = (
+        op_f.groupby(['user_idx', 'item_idx'])['order_number']
+        .nunique()
+        .reset_index(name='orders_with_item')
+    )
+    up_order_rate = up_order_rate.merge(user_total_orders.rename('total_user_orders'), on='user_idx')
+    up_order_rate['up_order_rate'] = (
+        up_order_rate['orders_with_item'] / up_order_rate['total_user_orders']
+    ).astype(np.float32)
+
+    # ── Merge into a single DataFrame ─────────────────────────────────────────
+    result = up_last[['user_idx', 'item_idx', 'up_days_since_last_order', 'up_orders_since_last_order']]
+    result = result.merge(up_streak[['user_idx', 'item_idx', 'up_order_streak']], on=['user_idx', 'item_idx'], how='left')
+    result = result.merge(up_order_rate[['user_idx', 'item_idx', 'up_order_rate']], on=['user_idx', 'item_idx'], how='left')
+    result['up_order_streak'] = result['up_order_streak'].fillna(0).astype(np.int32)
+    result['up_order_rate']   = result['up_order_rate'].fillna(0.0)
+    return result
+
+
 # ── Main loader ────────────────────────────────────────────────────────────────
 
 def load_instacart(
