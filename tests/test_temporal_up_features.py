@@ -87,3 +87,33 @@ def test_orders_since_last_order():
     # max_orders_global = 3; last_order_num for item0 = 1; orders_since = (3-1)/3
     expected = (3 - 1) / 3
     assert row['up_orders_since_last_order'] == pytest.approx(expected, abs=1e-4)
+
+
+def test_days_since_last_order_clip():
+    """A gap of 90 days should be clipped to 1.0 (> 30 days normalizes above 1)."""
+    op_f = _make_op_f([
+        {'user_idx': 0, 'item_idx': 0, 'order_id': 1, 'order_number': 1, 'days_since_prior_order': np.nan, 'reordered': 0},
+        {'user_idx': 0, 'item_idx': 1, 'order_id': 2, 'order_number': 2, 'days_since_prior_order': 90.0,   'reordered': 1},
+    ])
+    result = _compute_temporal_up_features(op_f)
+    row = result[(result['user_idx'] == 0) & (result['item_idx'] == 0)].iloc[0]
+    assert row['up_days_since_last_order'] == pytest.approx(1.0, abs=1e-4)
+
+
+def test_multi_user_isolation():
+    """Features for user 0 are unaffected by user 1's orders."""
+    op_f = _make_op_f([
+        # user 0: item 0 in orders 1,2 (streak=2)
+        {'user_idx': 0, 'item_idx': 0, 'order_id': 1, 'order_number': 1, 'days_since_prior_order': np.nan, 'reordered': 0},
+        {'user_idx': 0, 'item_idx': 0, 'order_id': 2, 'order_number': 2, 'days_since_prior_order': 7.0,    'reordered': 1},
+        # user 1: item 0 only in order 1 (streak=1)
+        {'user_idx': 1, 'item_idx': 0, 'order_id': 3, 'order_number': 1, 'days_since_prior_order': np.nan, 'reordered': 0},
+        {'user_idx': 1, 'item_idx': 1, 'order_id': 4, 'order_number': 2, 'days_since_prior_order': 14.0,   'reordered': 1},
+    ])
+    result = _compute_temporal_up_features(op_f)
+    u0_row = result[(result['user_idx'] == 0) & (result['item_idx'] == 0)].iloc[0]
+    u1_row = result[(result['user_idx'] == 1) & (result['item_idx'] == 0)].iloc[0]
+    assert u0_row['up_order_streak'] == 2
+    assert u1_row['up_order_streak'] == 1
+    # user 0 streak unaffected by user 1
+    assert u0_row['up_order_rate'] == pytest.approx(1.0, abs=1e-4)  # bought item 0 in both orders

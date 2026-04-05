@@ -209,9 +209,11 @@ def _compute_temporal_up_features(op_f: pd.DataFrame) -> pd.DataFrame:
     ).astype(np.float32)
 
     # ── Merge into a single DataFrame ─────────────────────────────────────────
-    result = up_last[['user_idx', 'item_idx', 'up_days_since_last_order', 'up_orders_since_last_order']]
+    result = up_last[['user_idx', 'item_idx', 'up_days_since_last_order', 'up_orders_since_last_order']].copy()
     result = result.merge(up_streak[['user_idx', 'item_idx', 'up_order_streak']], on=['user_idx', 'item_idx'], how='left')
     result = result.merge(up_order_rate[['user_idx', 'item_idx', 'up_order_rate']], on=['user_idx', 'item_idx'], how='left')
+    # fillna(0) is a safety guard; every (user, item) pair always has at least
+    # a streak of 1 (the last purchase always satisfies gap_from_max == 0).
     result['up_order_streak'] = result['up_order_streak'].fillna(0).astype(np.int32)
     result['up_order_rate']   = result['up_order_rate'].fillna(0.0)
     return result
