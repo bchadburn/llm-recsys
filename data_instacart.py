@@ -95,6 +95,15 @@ _PREMIUM_DEPTS = {'alcohol', 'meat seafood', 'babies', 'deli'}
 #   [21]    popularity       — log1p-normalized purchase count
 #   [22]    reorder_rate     — fraction of purchases that are re-purchases
 #   [23]    avg_cart_pos     — normalized mean add-to-cart position
+#
+# User×Product (UP) interaction features (7d):
+#   [0]     up_purchase_count_norm  — log1p-normalised count of times user bought item
+#   [1]     up_reorder_rate         — fraction of those purchases that are reorders
+#   [2]     up_user_order_frac      — purchase_count / user's total interactions
+#   [3]     up_days_since_last_order    — days since last purchase, /30 clipped [0,1]
+#   [4]     up_orders_since_last_order  — orders since last purchase, norm by global max
+#   [5]     up_order_streak_norm        — consecutive recent orders streak, norm by max
+#   [6]     up_order_rate               — orders_with_item / total_user_orders
 
 USER_FEATURE_DIM = 49
 ITEM_FEATURE_DIM = 24
@@ -243,8 +252,10 @@ def load_instacart(
                          price_tier, popularity, features
         interactions:    list[(user_idx, item_idx)]
         user_archetypes: np.ndarray [n_users] — dominant dept index per user
-        up_stats:        dict[(user_idx, item_idx), np.ndarray[3]] — UP features:
-                         [up_purchase_count_norm, up_reorder_rate, up_user_order_frac]
+        up_stats:        dict[(user_idx, item_idx), np.ndarray[7]] — UP features:
+                         [up_purchase_count_norm, up_reorder_rate, up_user_order_frac,
+                          up_days_since_last_order, up_orders_since_last_order,
+                          up_order_streak_norm, up_order_rate]
     """
     data_dir = Path(data_dir)
     _check_files(data_dir)
@@ -478,6 +489,10 @@ def load_instacart(
     #   [0] up_purchase_count_norm  — log1p-normalised count of times user bought item
     #   [1] up_reorder_rate         — fraction of those purchases that are reorders
     #   [2] up_user_order_frac      — purchase_count / user's total interactions
+    #   [3] up_days_since_last_order    — days since last purchase, /30 clipped [0,1]
+    #   [4] up_orders_since_last_order  — orders since last purchase, norm by global max
+    #   [5] up_order_streak_norm        — consecutive recent orders streak, norm by max
+    #   [6] up_order_rate               — orders_with_item / total_user_orders
     #
     # Stored as a dict for O(1) lookup in ranker._make_features().
     up_grp = (
@@ -491,18 +506,37 @@ def load_instacart(
     max_up_count = float(up_grp['up_count'].max() or 1)
     log_max      = float(np.log1p(max_up_count))
 
+    temporal_up = _compute_temporal_up_features(op_f)
+    max_streak = float(temporal_up['up_order_streak'].max() or 1)
+    temporal_up['up_order_streak_norm'] = (temporal_up['up_order_streak'] / max_streak).astype(np.float32)
+
+    up_grp = up_grp.merge(
+        temporal_up[['user_idx', 'item_idx',
+                     'up_days_since_last_order', 'up_orders_since_last_order',
+                     'up_order_streak_norm', 'up_order_rate']],
+        on=['user_idx', 'item_idx'],
+        how='left',
+    )
+    up_grp['up_days_since_last_order']   = up_grp['up_days_since_last_order'].fillna(1.0)
+    up_grp['up_orders_since_last_order'] = up_grp['up_orders_since_last_order'].fillna(1.0)
+    up_grp['up_order_streak_norm']       = up_grp['up_order_streak_norm'].fillna(0.0)
+    up_grp['up_order_rate']              = up_grp['up_order_rate'].fillna(0.0)
+
     up_stats: dict[tuple[int, int], np.ndarray] = {}
-    for u, i, cnt, rer in zip(
-        up_grp['user_idx'].tolist(),
-        up_grp['item_idx'].tolist(),
-        up_grp['up_count'].tolist(),
-        up_grp['up_reorder'].tolist(),
-    ):
+    for row in up_grp.itertuples(index=False):
+        u   = int(row.user_idx)
+        i   = int(row.item_idx)
+        cnt = int(row.up_count)
+        rer = int(row.up_reorder)
         user_total = float(user_interaction_totals.get(u, 1))
-        up_stats[(int(u), int(i))] = np.array([
-            float(np.log1p(cnt)) / log_max,        # up_purchase_count_norm
-            float(rer) / cnt if cnt > 0 else 0.0,  # up_reorder_rate
-            float(cnt) / user_total,                # up_user_order_frac
+        up_stats[(u, i)] = np.array([
+            float(np.log1p(cnt)) / log_max,              # [0] up_purchase_count_norm
+            float(rer) / cnt if cnt > 0 else 0.0,         # [1] up_reorder_rate
+            float(cnt) / user_total,                       # [2] up_user_order_frac
+            float(row.up_days_since_last_order),           # [3] up_days_since_last_order
+            float(row.up_orders_since_last_order),         # [4] up_orders_since_last_order
+            float(row.up_order_streak_norm),               # [5] up_order_streak_norm
+            float(row.up_order_rate),                      # [6] up_order_rate
         ], dtype=np.float32)
 
     print(f"  UP interaction pairs: {len(up_stats):,}", flush=True)
