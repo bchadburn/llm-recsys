@@ -28,8 +28,6 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from data import InteractionDataset  # same (user_feat, item_feat) Dataset logic
-
 
 # ── Department taxonomy ────────────────────────────────────────────────────────
 # Instacart has 21 departments (department_id 1–21 in the CSV).
@@ -208,10 +206,8 @@ def load_instacart(
         op_f      = op_f[op_f['order_id'].isin(prior_top['order_id'])].copy()
 
         op_f = op_f.merge(
-            prior_top[['order_id', 'user_id', 'days_since_prior_order']], on='order_id'
-        )
-        op_f = op_f.merge(
-            prior_top[['order_id', 'order_number']], on='order_id', how='left'
+            prior_top[['order_id', 'user_id', 'days_since_prior_order', 'order_number']],
+            on='order_id',
         )
         op_f = op_f.merge(
             products[['product_id', 'product_name', 'aisle', 'department']], on='product_id'
