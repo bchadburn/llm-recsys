@@ -66,22 +66,22 @@ def generate_descriptions(items: list, use_llm: bool = True) -> dict:
         print(f"  Loaded {len(cache)} cached descriptions")
 
     if not use_llm:
-        return {str(item['id']): make_template_description(item) for item in items}
+        return {str(i): make_template_description(item) for i, item in enumerate(items)}
 
     import anthropic
     client = anthropic.Anthropic()
 
-    uncached = [item for item in items if str(item['id']) not in cache]
+    uncached = [(i, item) for i, item in enumerate(items) if str(i) not in cache]
     print(f"  Generating LLM descriptions for {len(uncached)} items (cached: {len(cache)})...")
 
-    for i, item in enumerate(uncached):
+    for idx, (i, item) in enumerate(uncached):
         try:
-            cache[str(item['id'])] = make_llm_description(client, item)
+            cache[str(i)] = make_llm_description(client, item)
         except Exception as e:
-            print(f"  Warning: API call failed for item {item['id']}: {e}. Using template.")
-            cache[str(item['id'])] = make_template_description(item)
-        if i > 0 and i % 100 == 0:
-            print(f"    {i}/{len(uncached)} done...")
+            print(f"  Warning: API call failed for item {i}: {e}. Using template.")
+            cache[str(i)] = make_template_description(item)
+        if idx > 0 and idx % 100 == 0:
+            print(f"    {idx}/{len(uncached)} done...")
             CACHE_FILE.write_text(json.dumps(cache, indent=2))
         time.sleep(API_DELAY)
 
@@ -93,7 +93,7 @@ def generate_descriptions(items: list, use_llm: bool = True) -> dict:
 def embed_descriptions(descriptions: dict, items: list) -> np.ndarray:
     from sentence_transformers import SentenceTransformer
     model = SentenceTransformer(EMBED_MODEL)
-    texts = [descriptions.get(str(item['id']), make_template_description(item)) for item in items]
+    texts = [descriptions.get(str(i), make_template_description(item)) for i, item in enumerate(items)]
     print(f"  Embedding {len(texts)} descriptions...")
     embs = model.encode(texts, batch_size=BATCH_SIZE, show_progress_bar=True)
     return embs.astype(np.float32)
@@ -173,7 +173,7 @@ def main():
 
     # Template baseline
     print("\n--- Template descriptions (no LLM) ---")
-    template_descs  = {str(item['id']): make_template_description(item) for item in items}
+    template_descs  = {str(i): make_template_description(item) for i, item in enumerate(items)}
     template_embs   = embed_descriptions(template_descs, items)
     template_index  = build_index(template_embs)
     print("  Evaluating...")

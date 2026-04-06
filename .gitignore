@@ -13,3 +13,5 @@ docs/*
 !docs/superpowers/
 data/
 training.log
+CLAUDE.md
+logs/

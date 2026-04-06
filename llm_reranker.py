@@ -15,7 +15,6 @@ Contexts tested:
 
 import json
 import numpy as np
-import torch
 import faiss
 from pathlib import Path
 from dotenv import load_dotenv
@@ -64,12 +63,11 @@ def get_faiss_candidates(user_tower, faiss_index, user_features, uid: int):
     return scores[0], indices[0]
 
 
-def get_lgbm_ranking(user_tower, item_tower, faiss_index,
-                     user_features, item_features, interactions, up_stats,
-                     uid: int, candidate_indices: np.ndarray) -> np.ndarray:
-    """Re-rank candidates with LightGBM. Falls back to FAISS order on any error."""
+def build_lgbm_ranker(user_tower, item_tower, user_features, item_features,
+                      interactions, up_stats):
+    """Train LightGBM ranker once. Returns (ranker, user_embs, item_embs) or None on failure."""
     try:
-        from ranker import train_ranker, _make_features, _embed_users, _embed_items
+        from ranker import train_ranker, _embed_users, _embed_items
         from data_instacart import PRICE_SENS_IDX
 
         user_embs = _embed_users(user_tower, user_features)
@@ -83,7 +81,22 @@ def get_lgbm_ranking(user_tower, item_tower, faiss_index,
             interactions, up_stats, train_users,
             price_sens_idx=PRICE_SENS_IDX,
         )
+        return ranker, user_embs, item_embs
+    except Exception as e:
+        print(f"  Warning: LightGBM ranker training failed ({e}), will use FAISS order")
+        return None
 
+
+def get_lgbm_ranking(ranker_bundle, user_features, item_features,
+                     up_stats, uid: int, candidate_indices: np.ndarray) -> np.ndarray:
+    """Re-rank candidates with a pre-trained LightGBM ranker. Falls back to FAISS order."""
+    if ranker_bundle is None:
+        return candidate_indices
+    try:
+        from ranker import _make_features
+        from data_instacart import PRICE_SENS_IDX
+
+        ranker, user_embs, item_embs = ranker_bundle
         u_emb = user_embs[uid]
         faiss_scores = item_embs[candidate_indices] @ u_emb
         features = _make_features(
@@ -160,6 +173,11 @@ def main():
     user_features, item_features, items, interactions, user_archetypes, up_stats = load_data()
     user_tower, item_tower, faiss_index = train_towers(user_features, item_features, interactions)
 
+    print("  Training LightGBM ranker...")
+    ranker_bundle = build_lgbm_ranker(
+        user_tower, item_tower, user_features, item_features, interactions, up_stats,
+    )
+
     # Pick 3 demo users from the 3 largest archetype groups
     arch_counts = Counter(int(a) for a in user_archetypes)
     demo_users = []
@@ -171,9 +189,7 @@ def main():
         profile = user_profile_text(user_features, uid, dept_names)
         faiss_scores, faiss_indices = get_faiss_candidates(user_tower, faiss_index, user_features, uid)
         lgbm_indices = get_lgbm_ranking(
-            user_tower, item_tower, faiss_index,
-            user_features, item_features, interactions, up_stats,
-            uid, faiss_indices,
+            ranker_bundle, user_features, item_features, up_stats, uid, faiss_indices,
         )
 
         print(f"\n{'='*100}")

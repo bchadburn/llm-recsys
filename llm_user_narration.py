@@ -71,9 +71,9 @@ def load_or_build_item_index(items: list):
         print(f"  Loading enriched item descriptions from {CACHE_FILE}...")
         cache = json.loads(CACHE_FILE.read_text())
         texts = [
-            cache.get(str(item['id']),
+            cache.get(str(i),
                       f"{item['name']} - {item.get('aisle','?')} - {item.get('department','?')}")
-            for item in items
+            for i, item in enumerate(items)
         ]
         label = "LLM-enriched"
     else:
