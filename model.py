@@ -5,27 +5,37 @@ import torch.nn.functional as F
 
 class UserTower(nn.Module):
     """
-    Encodes a 20-dim user feature vector into a 64-dim L2-normalized embedding.
+    Encodes a user feature vector into a 64-dim L2-normalized embedding.
 
-    Layout of input features (20 floats):
-        [0:8]   norm_counts   — log1p-normalized purchase counts per category
-        [8:16]  prefs         — fraction of purchases per category (sums to 1)
-        [16]    total_inter   — normalized total interaction count
-        [17]    recency       — synthetic recency score in [0, 1]
-        [18]    price_sens    — price sensitivity in [0, 1]
-        [19]    variety       — normalized Shannon entropy of purchases
+    When n_users is provided, a learned nn.Embedding(n_users, id_embed_dim) table
+    is concatenated with the hand-crafted feature vector before the MLP. This
+    gives the model a per-user bias vector it can freely tune — capturing patterns
+    that aggregate features like category preferences cannot express (e.g. two
+    users with identical department distributions but completely different item
+    histories will get different embeddings).
+
+    NOTE: ID embeddings require enough interactions per user to avoid overfitting
+    the embedding table. Rule of thumb: at least 100–200 interactions per user.
+    With ~50k interactions / 2000 users (~25/user), use n_users=None (features only).
+    With full 1.4M interactions / 2000 users (~700/user), ID embeddings help.
     """
 
-    def __init__(self, input_dim: int = 20, embed_dim: int = 64):
+    def __init__(self, input_dim: int, embed_dim: int = 64,
+                 n_users: int | None = None, id_embed_dim: int = 32):
         super().__init__()
+        self.id_embed = nn.Embedding(n_users, id_embed_dim) if n_users else None
+        mlp_input = input_dim + (id_embed_dim if n_users else 0)
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 128),
+            nn.Linear(mlp_input, 128),
             nn.ReLU(),
             nn.LayerNorm(128),
+            nn.Dropout(0.1),
             nn.Linear(128, embed_dim),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, ids: torch.Tensor | None = None) -> torch.Tensor:
+        if self.id_embed is not None and ids is not None:
+            x = torch.cat([x, self.id_embed(ids)], dim=-1)
         return F.normalize(self.net(x), dim=-1)
 
 
@@ -33,22 +43,29 @@ class ItemTower(nn.Module):
     """
     Encodes an item feature vector into a 64-dim L2-normalized embedding.
 
-    Default input is a 384-dim sentence-transformer embedding
-    (all-MiniLM-L6-v2). Pass input_dim=13 to use the legacy one-hot features:
-        [0:8]   category_onehot — one-hot for 8 grocery categories
-        [8:11]  price_onehot    — one-hot: [budget, mid, premium]
-        [11]    popularity      — log1p-normalized interaction count in [0, 1]
-        [12]    avg_rating      — normalized rating in [0, 1]
+    When n_items is provided, a learned nn.Embedding(n_items, id_embed_dim) table
+    is concatenated with the content feature vector before the MLP. This captures
+    item-level biases (popularity spikes, niche appeal) that content features and
+    text embeddings cannot fully encode.
+
+    NOTE: ID embeddings require sufficient interaction coverage per item.
+    See UserTower docstring for guidance on when to enable.
     """
 
-    def __init__(self, input_dim: int = 384, embed_dim: int = 64):
+    def __init__(self, input_dim: int, embed_dim: int = 64,
+                 n_items: int | None = None, id_embed_dim: int = 32):
         super().__init__()
+        self.id_embed = nn.Embedding(n_items, id_embed_dim) if n_items else None
+        mlp_input = input_dim + (id_embed_dim if n_items else 0)
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 64),
+            nn.Linear(mlp_input, 64),
             nn.ReLU(),
             nn.LayerNorm(64),
+            nn.Dropout(0.1),
             nn.Linear(64, embed_dim),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, ids: torch.Tensor | None = None) -> torch.Tensor:
+        if self.id_embed is not None and ids is not None:
+            x = torch.cat([x, self.id_embed(ids)], dim=-1)
         return F.normalize(self.net(x), dim=-1)

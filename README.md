@@ -12,7 +12,9 @@ See [TWO_TOWER_MODEL.md](TWO_TOWER_MODEL.md) for a deep dive on the model archit
 recommendation_system/
 ├── data.py       synthetic data generation + PyTorch Dataset
 ├── model.py      UserTower and ItemTower (PyTorch nn.Module)
-├── main.py       training loop, FAISS index, inference demo
+├── main.py       training loop, FAISS index, inference demo, evaluation
+├── ranker.py     LightGBM lambdarank re-ranking stage (two-stage retrieval)
+├── eval.py       offline evaluation: Recall@K and NDCG@K
 └── requirements.txt
 ```
 
@@ -33,7 +35,12 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Expected output: training loss printed every 5 epochs, then a top-10 recommendation table for three user archetypes (produce buyer, snacks buyer, cleaning buyer), then production notes.
+Expected output:
+1. Training loss every 5 epochs for both approaches (one-hot features, text embeddings)
+2. Side-by-side top-10 comparison: one-hot vs text-embedding retrieval, three user archetypes
+3. Offline evaluation table — Recall@5/10/20 and NDCG@5/10/20 for both approaches
+4. LightGBM ranker training log, then FAISS top-10 vs re-ranked top-10 side by side
+5. Production notes
 
 ---
 
@@ -89,6 +96,34 @@ All data is generated in `data.py` at runtime — just run the script.
 **Users (500):** each user has a dominant category (their "archetype") that drives ~63% of their purchases. The remaining ~37% are spread across other categories. This creates realistic, separable user profiles.
 
 **Interactions (5000):** sampled per user with category bias. Used as positive (user, item) pairs during training. No explicit negatives are constructed — the training loss mines negatives from within each batch.
+
+---
+
+## Ranking stage
+
+`ranker.py` implements the second stage of a two-stage retrieval system. After FAISS retrieves the top-20 candidates per user, a LightGBM model with the lambdarank objective re-scores them using features that the dot-product two-tower cannot express:
+
+| Feature | Why it can't live in the two-tower |
+|---|---|
+| `user_emb ⊕ item_emb` (128d) | Two-tower collapses this to a scalar dot product |
+| FAISS dot-product score | Retrieval signal, passed through as a feature |
+| Item popularity | Global prior; entangled with category signal in the tower |
+| Item price tier | Categorical; GBDT splits handle this cleanly |
+| `user_price_sensitivity × price_tier` | Explicit cross-feature interaction — the two towers encode each side independently and cannot represent this joint signal |
+
+Relevance labels are synthetic: items the user purchased in the training interactions score 1, all other FAISS candidates score 0. The ranker trains on 200 users × 20 candidates = 4000 (user, item) pairs.
+
+---
+
+## Offline evaluation
+
+`eval.py` measures retrieval quality against the same 20% held-out validation split used during model training (reproduced deterministically from `SEED=42`).
+
+**Recall@K** — the retrieval metric. Of all items a user actually purchased, what fraction appear in the top-K results? Low Recall@20 means the ranker is working with an impoverished candidate set; items not retrieved by FAISS are invisible to every later stage.
+
+**NDCG@K** — the ranking metric. Normalized Discounted Cumulative Gain penalises relevant items that appear lower in the list. NDCG distinguishes a model that places the best match at rank 1 from one that buries it at rank 10 — Recall alone cannot.
+
+Both metrics are reported at K=5, 10, 20 for both approaches (one-hot features and text embeddings).
 
 ---
 

@@ -6,6 +6,11 @@ CATEGORIES = ['produce', 'dairy', 'meat', 'bakery', 'beverages', 'snacks', 'froz
 PRICE_TIERS = ['budget', 'mid', 'premium']
 N_CATS = len(CATEGORIES)
 
+# Constants imported by main.py so both data modules share a uniform interface
+ARCHETYPE_LABELS = ['produce', 'snacks', 'cleaning']
+USER_PREFS_SLICE = slice(8, 16)   # category preference fractions in user feature vector
+PRICE_SENS_IDX   = 18             # price_sensitivity index in user feature vector
+
 # 25 items per category = 200 items total
 ITEM_NAMES = {
     'produce': [
@@ -97,6 +102,7 @@ def generate_data(n_users=500, n_items=200, n_interactions=5000, seed=42):
                 'category': cat,
                 'cat_idx': cat_idx,
                 'price_tier': price_tier,
+                'popularity': popularity,   # pre-extracted for ranker.py
                 # features layout: [cat_onehot(8), price_onehot(3), popularity(1), avg_rating(1)] = 13
                 'features': np.concatenate([cat_onehot, price_onehot, [popularity, avg_rating]]).astype(np.float32),
             })
@@ -203,7 +209,13 @@ def get_item_text_embeddings(items):
 
 
 class InteractionDataset(Dataset):
-    """Returns (user_feature_vector, item_feature_vector) pairs."""
+    """Returns (user_features, item_features, user_id, item_id) tuples.
+
+    The user_id and item_id tensors are passed to the tower forward() methods
+    when ID embeddings are enabled (n_users/n_items set in the tower constructors).
+    Downstream code that doesn't use ID embeddings can simply ignore the last two
+    elements, but keeping them in the batch makes the interface uniform.
+    """
 
     def __init__(self, user_features, item_features, interactions):
         self.user_features = torch.tensor(user_features)
@@ -215,4 +227,9 @@ class InteractionDataset(Dataset):
 
     def __getitem__(self, idx):
         user_id, item_id = self.interactions[idx]
-        return self.user_features[user_id], self.item_features[item_id]
+        return (
+            self.user_features[user_id],
+            self.item_features[item_id],
+            torch.tensor(user_id, dtype=torch.long),
+            torch.tensor(item_id, dtype=torch.long),
+        )
