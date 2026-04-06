@@ -33,7 +33,7 @@ echo "======================================================================" >>
 
 cd "$SCRIPT_DIR"
 
-uv run python main.py \
+uv run --with xgboost python main.py \
     --data-dir "$DATA_DIR" \
     --n-users "$N_USERS" \
     --n-items "$N_ITEMS" \

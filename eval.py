@@ -45,16 +45,15 @@ import faiss
 
 def _reconstruct_val_interactions(interactions: list, n_users: int, seed: int = 42) -> list:
     """
-    Reproduce the user-level 20% held-out split from train() in main.py.
+    Reproduce the interaction-level 20% held-out split from train() in main.py.
 
-    Splits by user ID (not randomly by interaction) to prevent the same user
-    from appearing in both train and val — which would leak user-level patterns
-    and make val loss look better than it is on truly unseen users.
+    Splits randomly by interaction (not by user) so all user/item IDs appear
+    in training — required for ID embedding tables to be trained for every ID.
     """
     rng = np.random.default_rng(seed)
-    user_perm = rng.permutation(n_users)
-    val_users = set(user_perm[:int(0.2 * n_users)].tolist())
-    return [(u, i) for u, i in interactions if u in val_users]
+    perm  = rng.permutation(len(interactions))
+    split = int(0.8 * len(interactions))
+    return [interactions[i] for i in perm[split:]]
 
 
 # ── Per-query metric helpers ──────────────────────────────────────────────────

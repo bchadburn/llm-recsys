@@ -14,6 +14,7 @@ Download Instacart data:
 """
 
 import argparse
+from datetime import datetime
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -23,6 +24,7 @@ import faiss
 from model import UserTower, ItemTower
 from ranker import train_ranker, show_reranking_comparison
 from eval import evaluate, print_eval_table
+from xgb_model import train_xgb, evaluate_xgb, print_xgb_eval
 
 # ── Hyperparameters ────────────────────────────────────────────────────────────
 EMBED_DIM   = 64
@@ -40,15 +42,17 @@ np.random.seed(SEED)
 # ── Training ───────────────────────────────────────────────────────────────────
 
 def train(user_features, item_features, interactions, InteractionDataset):
-    # Split by user, not randomly — random splits let the same user appear in
-    # both train and val, leaking user-level patterns and underestimating val loss.
+    # Interaction-level split: 80% of each user's interactions go to train,
+    # 20% to val. All user/item IDs appear in training so ID embedding tables
+    # are updated for every ID — a user-level split would leave val-user
+    # embeddings randomly initialized, adding pure noise at eval time.
     n_users = user_features.shape[0]
     n_items = item_features.shape[0]
     rng = np.random.default_rng(SEED)
-    user_perm  = rng.permutation(n_users)
-    val_users  = set(user_perm[:int(0.2 * n_users)].tolist())
-    train_ints = [(u, i) for u, i in interactions if u not in val_users]
-    val_ints   = [(u, i) for u, i in interactions if u in val_users]
+    perm       = rng.permutation(len(interactions))
+    split      = int(0.8 * len(interactions))
+    train_ints = [interactions[i] for i in perm[:split]]
+    val_ints   = [interactions[i] for i in perm[split:]]
 
     train_ds = InteractionDataset(user_features, item_features, train_ints)
     val_ds   = InteractionDataset(user_features, item_features, val_ints)
@@ -359,7 +363,9 @@ def main():
 
     # ── Approach A: tabular item features ─────────────────────────────────────
     print(f"\n--- Approach A: {dataset_label_oh} ---")
+    t0 = datetime.now()
     user_tower_oh, item_tower_oh = train(user_features, item_features, interactions, InteractionDataset)
+    print(f"  Approach A training: {datetime.now() - t0}")
     print("\nBuilding FAISS index (tabular)...")
     index_oh = build_faiss_index(item_tower_oh, item_features)
     print(f"  Index ready: {index_oh.ntotal} vectors, dim={EMBED_DIM}")
@@ -369,7 +375,9 @@ def main():
     print("Loading sentence-transformer and embedding items...")
     item_text_embs = get_item_text_embeddings(items)
     print(f"  Item text embeddings: {item_text_embs.shape}")
+    t0 = datetime.now()
     user_tower_te, item_tower_te = train(user_features, item_text_embs, interactions, InteractionDataset)
+    print(f"  Approach B training: {datetime.now() - t0}")
     print("\nBuilding FAISS index (text embeddings)...")
     index_te = build_faiss_index(item_tower_te, item_text_embs)
     print(f"  Index ready: {index_te.ntotal} vectors, dim={EMBED_DIM}")
@@ -390,6 +398,14 @@ def main():
     results_oh = evaluate(user_tower_oh, index_oh, user_features, interactions)
     results_te = evaluate(user_tower_te, index_te, user_features, interactions)
     print_eval_table(results_oh, results_te)
+
+    # ── Approach C: XGBoost direct ranker ─────────────────────────────────────
+    if up_stats is not None:
+        t0 = datetime.now()
+        xgb_model = train_xgb(user_features, item_features, interactions, up_stats)
+        xgb_results = evaluate_xgb(xgb_model, user_features, item_features, interactions, up_stats)
+        print(f"  Approach C total: {datetime.now() - t0}")
+        print_xgb_eval(xgb_results)
 
     # ── LightGBM ranker ────────────────────────────────────────────────────────
     ranker = train_ranker(
