@@ -107,10 +107,13 @@ def evaluate(
         val_purchases.setdefault(uid, set()).add(iid)
 
     # Embed all users once (pass contiguous IDs so ID embedding tables are used if present)
+    device = next(user_tower.parameters()).device
     user_tower.eval()
-    all_user_ids = torch.arange(n_users)
+    all_user_ids = torch.arange(n_users, device=device)
     with torch.no_grad():
-        all_user_embs = user_tower(torch.tensor(user_features), ids=all_user_ids).numpy().astype(np.float32)
+        all_user_embs = user_tower(
+            torch.tensor(user_features, device=device), ids=all_user_ids
+        ).cpu().numpy().astype(np.float32)
     faiss.normalize_L2(all_user_embs)
 
     max_k = max(ks)

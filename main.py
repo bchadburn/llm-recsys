@@ -38,6 +38,8 @@ SEED        = 42
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 
 # ── Training ───────────────────────────────────────────────────────────────────
 
@@ -62,9 +64,9 @@ def train(user_features, item_features, interactions, InteractionDataset):
     # ID embeddings enabled: with ~1.4M interactions / 2000 users (~700/user)
     # the embedding tables have sufficient signal to generalize to held-out interactions.
     user_tower = UserTower(input_dim=user_features.shape[1], embed_dim=EMBED_DIM,
-                           n_users=n_users)
+                           n_users=n_users).to(DEVICE)
     item_tower = ItemTower(input_dim=item_features.shape[1], embed_dim=EMBED_DIM,
-                           n_items=n_items)
+                           n_items=n_items).to(DEVICE)
     optimizer  = torch.optim.Adam(
         list(user_tower.parameters()) + list(item_tower.parameters()), lr=LR
     )
@@ -74,7 +76,8 @@ def train(user_features, item_features, interactions, InteractionDataset):
     print("\nTraining (InfoNCE / NT-Xent loss, symmetric cross-entropy):")
     print(f"  {len(train_ints)} train interactions | {len(val_ints)} val interactions")
     print(f"  batch_size={BATCH_SIZE} | epochs={EPOCHS} | temperature={TEMPERATURE}")
-    print(f"  user_tower params={n_user_params:,} | item_tower params={n_item_params:,}\n")
+    print(f"  user_tower params={n_user_params:,} | item_tower params={n_item_params:,}")
+    print(f"  device={DEVICE}\n")
 
     for epoch in range(1, EPOCHS + 1):
         user_tower.train()
@@ -82,12 +85,16 @@ def train(user_features, item_features, interactions, InteractionDataset):
         train_loss = 0.0
 
         for user_feat, item_feat, user_ids, item_ids in train_loader:
+            user_feat = user_feat.to(DEVICE)
+            item_feat = item_feat.to(DEVICE)
+            user_ids  = user_ids.to(DEVICE)
+            item_ids  = item_ids.to(DEVICE)
             b = user_feat.size(0)
             user_emb = user_tower(user_feat, ids=user_ids)
             item_emb = item_tower(item_feat, ids=item_ids)
 
             logits = (user_emb @ item_emb.T) / TEMPERATURE
-            labels = torch.arange(b)
+            labels = torch.arange(b, device=DEVICE)
             loss   = (F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels)) / 2
 
             optimizer.zero_grad()
@@ -101,11 +108,15 @@ def train(user_features, item_features, interactions, InteractionDataset):
             val_loss = 0.0
             with torch.no_grad():
                 for user_feat, item_feat, user_ids, item_ids in val_loader:
+                    user_feat = user_feat.to(DEVICE)
+                    item_feat = item_feat.to(DEVICE)
+                    user_ids  = user_ids.to(DEVICE)
+                    item_ids  = item_ids.to(DEVICE)
                     b = user_feat.size(0)
                     user_emb = user_tower(user_feat, ids=user_ids)
                     item_emb = item_tower(item_feat, ids=item_ids)
                     logits   = (user_emb @ item_emb.T) / TEMPERATURE
-                    labels   = torch.arange(b)
+                    labels   = torch.arange(b, device=DEVICE)
                     val_loss += ((F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels)) / 2).item()
             print(
                 f"  Epoch {epoch:2d}/{EPOCHS} | "
@@ -121,9 +132,11 @@ def train(user_features, item_features, interactions, InteractionDataset):
 def build_faiss_index(item_tower, item_features):
     """Embed all items and load them into an exact inner-product FAISS index."""
     item_tower.eval()
-    item_ids = torch.arange(len(item_features))
+    item_ids = torch.arange(len(item_features), device=DEVICE)
     with torch.no_grad():
-        item_embs = item_tower(torch.tensor(item_features), ids=item_ids).numpy().astype(np.float32)
+        item_embs = item_tower(
+            torch.tensor(item_features, device=DEVICE), ids=item_ids
+        ).cpu().numpy().astype(np.float32)
     faiss.normalize_L2(item_embs)
     index = faiss.IndexFlatIP(EMBED_DIM)
     index.add(item_embs)
@@ -150,10 +163,10 @@ def run_inference(user_tower, index, user_features, items, user_archetypes,
     print("=" * 72)
 
     for archetype, user_id in demo_users.items():
-        feat = torch.tensor(user_features[user_id]).unsqueeze(0)
-        uid  = torch.tensor([user_id])
+        feat = torch.tensor(user_features[user_id], device=DEVICE).unsqueeze(0)
+        uid  = torch.tensor([user_id], device=DEVICE)
         with torch.no_grad():
-            user_emb = user_tower(feat, ids=uid).numpy().astype(np.float32)
+            user_emb = user_tower(feat, ids=uid).cpu().numpy().astype(np.float32)
         faiss.normalize_L2(user_emb)
 
         scores, indices = index.search(user_emb, 10)
@@ -196,18 +209,18 @@ def compare_inference(user_tower_oh, index_oh, user_tower_te, index_te,
     print("=" * 94)
 
     for archetype, user_id in demo_users.items():
-        feat = torch.tensor(user_features[user_id]).unsqueeze(0)
-        uid  = torch.tensor([user_id])
+        feat = torch.tensor(user_features[user_id], device=DEVICE).unsqueeze(0)
+        uid  = torch.tensor([user_id], device=DEVICE)
 
         user_tower_oh.eval()
         with torch.no_grad():
-            emb_oh = user_tower_oh(feat, ids=uid).numpy().astype(np.float32)
+            emb_oh = user_tower_oh(feat, ids=uid).cpu().numpy().astype(np.float32)
         faiss.normalize_L2(emb_oh)
         scores_oh, idx_oh = index_oh.search(emb_oh, 10)
 
         user_tower_te.eval()
         with torch.no_grad():
-            emb_te = user_tower_te(feat, ids=uid).numpy().astype(np.float32)
+            emb_te = user_tower_te(feat, ids=uid).cpu().numpy().astype(np.float32)
         faiss.normalize_L2(emb_te)
         scores_te, idx_te = index_te.search(emb_te, 10)
 

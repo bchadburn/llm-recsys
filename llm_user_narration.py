@@ -100,7 +100,7 @@ def query_index(profile_text: str, st_model, index: faiss.IndexFlatIP, k: int = 
 
 
 def category_precision(indices: np.ndarray, items: list, dominant_dept: str) -> float:
-    hits = sum(1 for idx in indices if items[idx].get('department', '') == dominant_dept)
+    hits = sum(1 for idx in indices if items[idx].get('category', '') == dominant_dept)
     return hits / len(indices)
 
 

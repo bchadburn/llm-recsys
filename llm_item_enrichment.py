@@ -90,9 +90,7 @@ def generate_descriptions(items: list, use_llm: bool = True) -> dict:
     return cache
 
 
-def embed_descriptions(descriptions: dict, items: list) -> np.ndarray:
-    from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer(EMBED_MODEL)
+def embed_descriptions(descriptions: dict, items: list, model) -> np.ndarray:
     texts = [descriptions.get(str(i), make_template_description(item)) for i, item in enumerate(items)]
     print(f"  Embedding {len(texts)} descriptions...")
     embs = model.encode(texts, batch_size=BATCH_SIZE, show_progress_bar=True)
@@ -108,11 +106,9 @@ def build_index(embs: np.ndarray) -> faiss.IndexFlatIP:
 
 
 def zero_shot_evaluate(index: faiss.IndexFlatIP, user_features: np.ndarray,
-                        interactions: list, ks=(5, 10, 20)) -> dict:
-    from sentence_transformers import SentenceTransformer
+                        interactions: list, model, ks=(5, 10, 20)) -> dict:
     from data_instacart import DEPARTMENTS
 
-    st_model = SentenceTransformer(EMBED_MODEL)
     dept_names = DEPARTMENTS
     n_depts = len(dept_names)
 
@@ -136,7 +132,7 @@ def zero_shot_evaluate(index: faiss.IndexFlatIP, user_features: np.ndarray,
         user_texts.append(desc)
 
     print(f"  Embedding {len(user_texts)} user profiles...")
-    user_embs = st_model.encode(user_texts, batch_size=BATCH_SIZE, show_progress_bar=False).astype(np.float32)
+    user_embs = model.encode(user_texts, batch_size=BATCH_SIZE, show_progress_bar=True).astype(np.float32)
     faiss.normalize_L2(user_embs)
 
     max_k = max(ks)
@@ -171,21 +167,25 @@ def main():
 
     user_features, item_features, items, interactions = load_data()
 
+    from sentence_transformers import SentenceTransformer
+    print(f"  Loading embedding model ({EMBED_MODEL})...")
+    st_model = SentenceTransformer(EMBED_MODEL)
+
     # Template baseline
     print("\n--- Template descriptions (no LLM) ---")
     template_descs  = {str(i): make_template_description(item) for i, item in enumerate(items)}
-    template_embs   = embed_descriptions(template_descs, items)
+    template_embs   = embed_descriptions(template_descs, items, st_model)
     template_index  = build_index(template_embs)
     print("  Evaluating...")
-    template_results = zero_shot_evaluate(template_index, user_features, interactions)
+    template_results = zero_shot_evaluate(template_index, user_features, interactions, st_model)
 
     # LLM-enriched
     print("\n--- LLM-enriched descriptions ---")
     llm_descs  = generate_descriptions(items, use_llm=not args.no_llm)
-    llm_embs   = embed_descriptions(llm_descs, items)
+    llm_embs   = embed_descriptions(llm_descs, items, st_model)
     llm_index  = build_index(llm_embs)
     print("  Evaluating...")
-    llm_results = zero_shot_evaluate(llm_index, user_features, interactions)
+    llm_results = zero_shot_evaluate(llm_index, user_features, interactions, st_model)
 
     # Summary
     ks = (5, 10, 20)
