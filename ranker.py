@@ -58,7 +58,7 @@ def _embed_users(user_tower, user_features: np.ndarray) -> np.ndarray:
     user_tower.eval()
     user_ids = torch.arange(len(user_features))
     with torch.no_grad():
-        embs = user_tower(torch.tensor(user_features), ids=user_ids).numpy().astype(np.float32)
+        embs = user_tower(torch.tensor(user_features), ids=user_ids).cpu().numpy().astype(np.float32)
     faiss.normalize_L2(embs)
     return embs
 
@@ -67,7 +67,7 @@ def _embed_items(item_tower, item_features: np.ndarray) -> np.ndarray:
     item_tower.eval()
     item_ids = torch.arange(len(item_features))
     with torch.no_grad():
-        embs = item_tower(torch.tensor(item_features), ids=item_ids).numpy().astype(np.float32)
+        embs = item_tower(torch.tensor(item_features), ids=item_ids).cpu().numpy().astype(np.float32)
     faiss.normalize_L2(embs)
     return embs
 

@@ -16,6 +16,7 @@ Contexts tested:
 import json
 import numpy as np
 import faiss
+import torch
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -54,10 +55,11 @@ def train_towers(user_features, item_features, interactions):
 
 def get_faiss_candidates(user_tower, faiss_index, user_features, uid: int):
     user_tower.eval()
-    feat  = torch.tensor(user_features[uid]).unsqueeze(0)
-    uid_t = torch.tensor([uid])
+    device = next(user_tower.parameters()).device
+    feat  = torch.tensor(user_features[uid]).unsqueeze(0).to(device)
+    uid_t = torch.tensor([uid]).to(device)
     with torch.no_grad():
-        emb = user_tower(feat, ids=uid_t).numpy().astype(np.float32)
+        emb = user_tower(feat, ids=uid_t).cpu().numpy().astype(np.float32)
     faiss.normalize_L2(emb)
     scores, indices = faiss_index.search(emb, RETRIEVAL_K)
     return scores[0], indices[0]
