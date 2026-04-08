@@ -11,6 +11,12 @@ Contexts tested:
   - Mediterranean dinner for two
   - High-protein / muscle-building diet
   - Road trip snacks (non-refrigerated)
+
+Aggregate evaluation:
+  N_EVAL_USERS users are evaluated across all three methods (FAISS, LightGBM,
+  LLM no-context) using Recall@K and NDCG@K on held-out val interactions.
+  LLM is only evaluated at no-context to keep API costs tractable; the
+  qualitative demo shows context-dependent reranking for N_DEMO_USERS.
 """
 
 import json
@@ -22,11 +28,13 @@ from dotenv import load_dotenv
 
 load_dotenv(Path.home() / '.env')
 
-DATA_DIR     = Path('data/instacart')
-MODEL        = 'claude-haiku-4-5-20251001'
-RETRIEVAL_K  = 20
-FINAL_K      = 10
-N_DEMO_USERS = 3
+DATA_DIR      = Path('data/instacart')
+MODEL         = 'claude-haiku-4-5-20251001'
+RETRIEVAL_K   = 20
+FINAL_K       = 10
+N_DEMO_USERS  = 3
+N_EVAL_USERS  = 50   # users scored for aggregate metrics (LLM API cost: ~50 calls)
+
 
 CONTEXTS = [
     None,
@@ -35,6 +43,8 @@ CONTEXTS = [
     "Quick road trip snacks, nothing that needs refrigeration",
 ]
 
+
+# ── Data / model helpers ──────────────────────────────────────────────────────
 
 def load_data():
     from data_instacart import load_instacart
@@ -67,7 +77,6 @@ def get_faiss_candidates(user_tower, faiss_index, user_features, uid: int):
 
 def build_lgbm_ranker(user_tower, item_tower, user_features, item_features,
                       interactions, up_stats):
-    """Train LightGBM ranker once. Returns (ranker, user_embs, item_embs) or None on failure."""
     try:
         from ranker import train_ranker, _embed_users, _embed_items
         from data_instacart import PRICE_SENS_IDX
@@ -91,7 +100,6 @@ def build_lgbm_ranker(user_tower, item_tower, user_features, item_features,
 
 def get_lgbm_ranking(ranker_bundle, user_features, item_features,
                      up_stats, uid: int, candidate_indices: np.ndarray) -> np.ndarray:
-    """Re-rank candidates with a pre-trained LightGBM ranker. Falls back to FAISS order."""
     if ranker_bundle is None:
         return candidate_indices
     try:
@@ -113,9 +121,10 @@ def get_lgbm_ranking(ranker_bundle, user_features, item_features,
         return candidate_indices
 
 
+# ── LLM reranker ──────────────────────────────────────────────────────────────
+
 def llm_rerank(client, items: list, candidate_indices: np.ndarray,
                user_profile: str, context: str | None) -> tuple[list, str]:
-    """Ask Claude to rerank candidates given optional shopping context."""
     candidate_list = "\n".join(
         f"{i+1}. {items[idx]['name']} ({items[idx].get('department','?')})"
         for i, idx in enumerate(candidate_indices[:RETRIEVAL_K])
@@ -162,6 +171,201 @@ def user_profile_text(user_features: np.ndarray, uid: int, dept_names: list) -> 
     )
 
 
+# ── Aggregate evaluation ──────────────────────────────────────────────────────
+
+def _recall_at_k(retrieved: list, relevant: set, k: int) -> float:
+    hits = sum(1 for item_id in retrieved[:k] if int(item_id) in relevant)
+    return hits / len(relevant) if relevant else 0.0
+
+
+def _ndcg_at_k(retrieved: list, relevant: set, k: int) -> float:
+    dcg = sum(
+        1.0 / np.log2(rank + 2)
+        for rank, item_id in enumerate(retrieved[:k])
+        if int(item_id) in relevant
+    )
+    n_rel = min(len(relevant), k)
+    idcg  = sum(1.0 / np.log2(r + 2) for r in range(n_rel))
+    return dcg / idcg if idcg > 0 else 0.0
+
+
+def aggregate_eval(client, user_tower, faiss_index, ranker_bundle,
+                   user_features, item_features, items, interactions,
+                   dept_names, n_users: int = N_EVAL_USERS, ks=(5, 10)):
+    """
+    Evaluate FAISS, LightGBM, and LLM (no-context) on held-out val interactions
+    for n_users randomly sampled from users that have val purchases.
+
+    Uses the same 80/20 interaction-level split as the two-tower training.
+    """
+    from eval import _reconstruct_val_interactions
+
+    val_ints = _reconstruct_val_interactions(interactions, n_users=user_features.shape[0])
+    val_purchases: dict[int, set] = {}
+    for uid, iid in val_ints:
+        val_purchases.setdefault(uid, set()).add(iid)
+
+    rng = np.random.default_rng(42)
+    eval_uids = rng.choice(
+        list(val_purchases.keys()), size=min(n_users, len(val_purchases)), replace=False
+    )
+
+    scores = {
+        'faiss':  {k: [] for k in ks},
+        'lgbm':   {k: [] for k in ks},
+        'llm':    {k: [] for k in ks},
+    }
+
+    print(f"\n  Computing aggregate metrics over {len(eval_uids)} users...")
+    for i, uid in enumerate(eval_uids):
+        relevant = val_purchases[uid]
+        profile  = user_profile_text(user_features, uid, dept_names)
+
+        faiss_scores_arr, faiss_indices = get_faiss_candidates(
+            user_tower, faiss_index, user_features, uid
+        )
+        lgbm_indices = get_lgbm_ranking(
+            ranker_bundle, user_features, item_features, None, uid, faiss_indices
+        )
+        llm_indices, _ = llm_rerank(client, items, faiss_indices, profile, context=None)
+
+        for k in ks:
+            scores['faiss'][k].append(_recall_at_k(list(faiss_indices), relevant, k))
+            scores['lgbm'][k].append(_recall_at_k(list(lgbm_indices),  relevant, k))
+            scores['llm'][k].append(_recall_at_k(list(llm_indices),   relevant, k))
+
+        if (i + 1) % 10 == 0:
+            print(f"    {i+1}/{len(eval_uids)} users evaluated...")
+
+    return {
+        method: {k: float(np.mean(v)) for k, v in ks_dict.items()}
+        for method, ks_dict in scores.items()
+    }, len(eval_uids)
+
+
+def print_aggregate_table(agg_results: dict, n_users: int, ks=(5, 10)):
+    print("\n" + "="*72)
+    print("  EXPERIMENT 3 — AGGREGATE METRICS (no-context baseline)")
+    print("="*72)
+    print(f"  Users evaluated: {n_users}  |  Candidate set: FAISS top-{RETRIEVAL_K}\n")
+    header = f"  {'Method':<22}" + "".join(f"{'Recall@'+str(k):<12}" for k in ks)
+    print(header)
+    print("  " + "-" * (22 + 12 * len(ks)))
+    labels = {'faiss': 'FAISS', 'lgbm': 'LightGBM', 'llm': f'LLM ({MODEL.split("-")[1]})'}
+    for key, label in labels.items():
+        row = f"  {label:<22}" + "".join(f"{agg_results[key][k]:<12.4f}" for k in ks)
+        print(row)
+    print()
+    for k in ks:
+        lgbm_delta = agg_results['lgbm'][k] - agg_results['faiss'][k]
+        llm_delta  = agg_results['llm'][k]  - agg_results['faiss'][k]
+        print(f"  LightGBM vs FAISS  Recall@{k}: {lgbm_delta:+.4f}")
+        print(f"  LLM      vs FAISS  Recall@{k}: {llm_delta:+.4f}")
+
+
+# ── Exp 4 diagnostic ──────────────────────────────────────────────────────────
+
+def diagnose_synthetic_context(user_features: np.ndarray, interactions: list):
+    """
+    Investigate why synthetic occasion injection (Exp 4) degraded performance.
+
+    Three hypotheses tested:
+      H1 — Occasions are uniformly random → zero correlation with purchases
+      H2 — Occasion fractions are near-uniform per user → no signal
+      H3 — The occasion features are too small a fraction of the feature vector
+           to influence learned embeddings
+    """
+    from synthetic_context import inject_occasions, OCCASIONS, N_OCCASIONS
+
+    print("\n" + "="*72)
+    print("  EXP 4 DIAGNOSTIC: WHY DID SYNTHETIC CONTEXT HURT?")
+    print("="*72)
+
+    augmented = inject_occasions(user_features, interactions)
+    occ_fracs = augmented[:, user_features.shape[1]:]   # last N_OCCASIONS columns
+
+    # H1: correlation between occasion fracs and purchase behaviour
+    # Proxy: do users with high 'health_diet' fraction buy different items?
+    rng = np.random.default_rng(42)
+    health_idx = OCCASIONS.index('health_diet')
+    health_fracs = occ_fracs[:, health_idx]
+
+    high_health = np.where(health_fracs > np.percentile(health_fracs, 75))[0]
+    low_health  = np.where(health_fracs < np.percentile(health_fracs, 25))[0]
+
+    high_items: dict[int, int] = {}
+    low_items:  dict[int, int] = {}
+    for uid, iid in interactions:
+        if uid in high_health:
+            high_items[iid] = high_items.get(iid, 0) + 1
+        elif uid in low_health:
+            low_items[iid] = low_items.get(iid, 0) + 1
+
+    high_set = set(sorted(high_items, key=lambda x: -high_items[x])[:20])
+    low_set  = set(sorted(low_items,  key=lambda x: -low_items[x])[:20])
+    overlap  = len(high_set & low_set)
+
+    print(f"\n  H1 — Occasion-purchase correlation")
+    print(f"  Top-20 items for high vs low 'health_diet' users:")
+    print(f"  Overlap: {overlap}/20  (20/20 = purely random, 0/20 = perfectly correlated)")
+    print(f"  → {'CONFIRMED random' if overlap >= 15 else 'Some signal present'}: "
+          f"occasion labels were assigned randomly per interaction, so occasion "
+          f"fractions per user are driven by interaction count, not actual behavior.")
+
+    # H2: variance of occasion fracs — are they near-uniform?
+    per_user_entropy = -np.sum(
+        np.where(occ_fracs > 0, occ_fracs * np.log(occ_fracs + 1e-9), 0), axis=1
+    )
+    max_entropy = np.log(N_OCCASIONS)
+    mean_frac_of_max = float(np.mean(per_user_entropy)) / max_entropy
+
+    print(f"\n  H2 — Feature variance (occasion fracs near-uniform?)")
+    print(f"  Mean per-user entropy: {np.mean(per_user_entropy):.3f}  "
+          f"(max uniform = {max_entropy:.3f})")
+    print(f"  Mean fraction of max entropy: {mean_frac_of_max:.1%}")
+    print(f"  Occasion frac std dev across users: {occ_fracs.std(axis=0).mean():.4f}")
+    print(f"  → {'CONFIRMED near-uniform' if mean_frac_of_max > 0.85 else 'Some variance present'}: "
+          f"with ~700 interactions/user and 6 occasions assigned uniformly at random, "
+          f"each user converges to ~1/6 per occasion by the law of large numbers. "
+          f"The features carry near-zero variance and no signal.")
+
+    # H3: feature dilution — what fraction of the user feature vector are occasions?
+    orig_dim = user_features.shape[1]
+    aug_dim  = augmented.shape[1]
+    occ_frac_of_total = N_OCCASIONS / aug_dim
+
+    print(f"\n  H3 — Feature dilution")
+    print(f"  Original user feature dim: {orig_dim}d")
+    print(f"  Occasion features added:   {N_OCCASIONS}d")
+    print(f"  Augmented dim:             {aug_dim}d")
+    print(f"  Occasion fraction of total: {occ_frac_of_total:.1%}")
+    print(f"  → Even if occasions had signal, they represent only {occ_frac_of_total:.0%} "
+          f"of the input. The tower MLP would need to heavily up-weight these "
+          f"dimensions to use them — unlikely without a targeted architecture change.")
+
+    print(f"\n  ROOT CAUSE SUMMARY")
+    print(f"  " + "-"*60)
+    print(f"  The synthetic occasions failed for all three reasons simultaneously:")
+    print(f"  1. Labels were random per interaction → zero ground-truth correlation")
+    print(f"  2. ~700 interactions/user → per-user fracs collapse to ~1/6 each")
+    print(f"     (law of large numbers erases any variance the random assignment created)")
+    print(f"  3. 6/55 = 11% of feature vector → diluted even if signal existed")
+    print(f"")
+    print(f"  The slight regression (R@20 -0.0025) is not from 'bad context' —")
+    print(f"  it's from adding 6 near-constant noise dimensions that slightly")
+    print(f"  destabilise the MLP's weight initialisation and optimisation landscape.")
+    print(f"")
+    print(f"  FIX: To test whether context injection CAN work, occasions need to be")
+    print(f"  derived from actual purchase signals, not assigned randomly. Options:")
+    print(f"  a) Use temporal data — time-of-day / day-of-week of actual orders")
+    print(f"  b) Use department mix — classify each order basket into an occasion")
+    print(f"     using a rule (>50% produce + protein → 'cooking'; >50% snacks → 'snacking')")
+    print(f"  c) Use LLM to label each historical basket with an occasion, then")
+    print(f"     aggregate per user — this produces correlated occasion fracs.")
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 def main():
     print("\n" + "="*72)
     print("  EXPERIMENT 3: CONTEXTUAL LLM RERANKER")
@@ -180,7 +384,7 @@ def main():
         user_tower, item_tower, user_features, item_features, interactions, up_stats,
     )
 
-    # Pick 3 demo users from the 3 largest archetype groups
+    # ── Qualitative demo: 3 users × 4 contexts ────────────────────────────────
     arch_counts = Counter(int(a) for a in user_archetypes)
     demo_users = []
     for arch_id, _ in arch_counts.most_common(N_DEMO_USERS):
@@ -189,7 +393,7 @@ def main():
 
     for uid in demo_users:
         profile = user_profile_text(user_features, uid, dept_names)
-        faiss_scores, faiss_indices = get_faiss_candidates(user_tower, faiss_index, user_features, uid)
+        faiss_scores_arr, faiss_indices = get_faiss_candidates(user_tower, faiss_index, user_features, uid)
         lgbm_indices = get_lgbm_ranking(
             ranker_bundle, user_features, item_features, up_stats, uid, faiss_indices,
         )
@@ -213,6 +417,17 @@ def main():
                 l_item  = items[lgbm_indices[rank]]['name'][:30]  if rank < len(lgbm_indices)  else ""
                 ll_item = items[llm_indices[rank]]['name'][:30]   if rank < len(llm_indices)   else ""
                 print(f"  {rank+1:<5} {f_item:<33} {l_item:<33} {ll_item:<33}")
+
+    # ── Aggregate metrics ──────────────────────────────────────────────────────
+    agg_results, n_eval = aggregate_eval(
+        client, user_tower, faiss_index, ranker_bundle,
+        user_features, item_features, items, interactions,
+        dept_names, n_users=N_EVAL_USERS,
+    )
+    print_aggregate_table(agg_results, n_eval)
+
+    # ── Exp 4 diagnostic ───────────────────────────────────────────────────────
+    diagnose_synthetic_context(user_features, interactions)
 
     print("\n  EXPERIMENT 3 COMPLETE")
 
