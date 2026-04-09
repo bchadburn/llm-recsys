@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs all 4 LLM experiments sequentially, logs each independently,
+# Runs all 5 LLM experiments sequentially, logs each independently,
 # then generates overnight_report.md.
 # Safe to re-run: Exp 1 caches API results; Exps 2-4 are deterministic.
 
@@ -46,6 +46,7 @@ run_experiment 1 "llm_item_enrichment.py" "$LOG_DIR/exp1_enrichment.log"
 run_experiment 2 "llm_user_narration.py"  "$LOG_DIR/exp2_narration.log"
 run_experiment 3 "llm_reranker.py"        "$LOG_DIR/exp3_reranker.log"
 run_experiment 4 "synthetic_context.py"   "$LOG_DIR/exp4_synthetic.log"
+run_experiment 5 "exp5_dual_head.py"      "$LOG_DIR/exp5_dual_head.log"
 
 log "Generating overnight_report.md..."
 uv run --with python-dotenv python generate_report.py

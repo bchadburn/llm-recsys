@@ -12,6 +12,7 @@ LOGS = {
     2: Path('logs/exp2_narration.log'),
     3: Path('logs/exp3_reranker.log'),
     4: Path('logs/exp4_synthetic.log'),
+    5: Path('logs/exp5_dual_head.log'),
 }
 REPORT = Path('overnight_report.md')
 
@@ -20,12 +21,14 @@ EXP_TITLES = {
     2: "Zero-shot User Narration",
     3: "Contextual LLM Reranker",
     4: "Synthetic Context Injection",
+    5: "Dual-Head Item Tower",
 }
 EXP_PATTERNS = {
     1: "Offline LLM-generated content → richer embeddings → better retrieval",
     2: "User features → text profile → item index query (no trained tower)",
     3: "FAISS candidates + session context → Claude reranking with reasoning",
     4: "Synthetic occasions injected into training → context-aware two-tower",
+    5: "Frozen semantic head + collaborative head with learned gate weight (α)",
 }
 
 
@@ -75,7 +78,7 @@ def generate():
 
     statuses = {
         n: "✅ COMPLETE" if check_completed(logs[n], n) else "❌ FAILED/INCOMPLETE"
-        for n in range(1, 5)
+        for n in range(1, 6)
     }
 
     lines = [
@@ -87,7 +90,7 @@ def generate():
         "| Experiment | Status |",
         "|---|---|",
     ]
-    for n in range(1, 5):
+    for n in range(1, 6):
         lines.append(f"| Exp {n}: {EXP_TITLES[n]} | {statuses[n]} |")
 
     lines += [
@@ -96,7 +99,7 @@ def generate():
         "",
     ]
 
-    for n in range(1, 5):
+    for n in range(1, 6):
         lines += [
             f"## Exp {n}: {EXP_TITLES[n]}",
             f"*Pattern: {EXP_PATTERNS[n]}*",
@@ -127,6 +130,7 @@ def generate():
         "| Exp 2 | `logs/exp2_narration.log` |",
         "| Exp 3 | `logs/exp3_reranker.log` |",
         "| Exp 4 | `logs/exp4_synthetic.log` |",
+        "| Exp 5 | `logs/exp5_dual_head.log` |",
         "| Orchestration | `logs/orchestration.log` |",
     ]
 
