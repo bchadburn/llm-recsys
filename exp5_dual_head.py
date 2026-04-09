@@ -229,16 +229,17 @@ def print_summary(results: dict, ks=(5, 10, 20)):
     print("="*72)
     print(f"\n  {'Method':<35} {'R@5':<10} {'R@10':<10} {'R@20':<10} {'N@10':<10}")
     print("  " + "-"*65)
-    baseline = results['baseline']['recall'][20]
+    baseline_key = next(k for k in results if 'baseline' in k)
+    baseline = results[baseline_key]['recall'][20]
     for label, res in results.items():
         r5  = res['recall'][5]
         r10 = res['recall'][10]
         r20 = res['recall'][20]
         n10 = res['ndcg'][10]
-        delta = f"  ({r20-baseline:+.4f} vs baseline)" if label != 'baseline' else ""
+        delta = f"  ({r20-baseline:+.4f} vs baseline)" if label != baseline_key else ""
         print(f"  {label:<35} {r5:<10.4f} {r10:<10.4f} {r20:<10.4f} {n10:<10.4f}{delta}")
 
-    print(f"\n  Users evaluated: {results['baseline']['n_eval_users']}")
+    print(f"\n  Users evaluated: {results[baseline_key]['n_eval_users']}")
     print()
     print("  Interpretation guide:")
     print("  · α printed during training = learned semantic weight (0=collab only, 1=semantic only)")
