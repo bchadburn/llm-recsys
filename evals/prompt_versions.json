@@ -1,0 +1,23 @@
+{
+  "item_description": [
+    {
+      "hash": "173b334d55",
+      "version": "v1",
+      "snippet": "Write a 2-sentence product description for a grocery item that would help a recommendation system understand what kind o"
+    }
+  ],
+  "user_narration": [
+    {
+      "hash": "dbdc257ac1",
+      "version": "v1",
+      "snippet": "Given this grocery shopper's purchase history, write a 2-sentence profile that infers their likely meal habits, househol"
+    }
+  ],
+  "reranker": [
+    {
+      "hash": "c54913b27a",
+      "version": "v1",
+      "snippet": "You are a grocery recommendation system. Rerank the following {n_candidates} candidate items for a shopper.  Shopper pro"
+    }
+  ]
+}

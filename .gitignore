@@ -15,3 +15,6 @@ data/
 training.log
 CLAUDE.md
 logs/
+evals/results/
+item_descriptions_cache.json
+overnight_report.md
