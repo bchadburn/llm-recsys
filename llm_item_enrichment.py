@@ -77,7 +77,7 @@ def generate_descriptions(items: list, use_llm: bool = True) -> dict:
     for idx, (i, item) in enumerate(uncached):
         try:
             cache[str(i)] = make_llm_description(client, item)
-        except Exception as e:
+        except anthropic.APIError as e:
             print(f"  Warning: API call failed for item {i}: {e}. Using template.")
             cache[str(i)] = make_template_description(item)
         if idx > 0 and idx % 100 == 0:
