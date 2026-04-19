@@ -42,25 +42,28 @@ stage. Five experiments layer in LLM capabilities on top of that foundation.
 
 ---
 
-## Key findings
+## Results
 
-**Exp 1 — Item enrichment:** LLM descriptions are 6.3× richer than template text
-(65 vs 10 words avg). Department coverage 74.6%. Marginal Recall improvement over
-template embeddings — semantic signal exists but the sentence-transformer already
-captures most of it from item names alone.
+Two-tower baseline (trained, 2,000 users, 80/20 split):
 
-**Exp 3 — LLM reranker:** Context-aware reranking demonstrably shifts rankings
-(same user, different context → different top items). Aggregate Recall is competitive
-with LightGBM at a much higher API cost — value is in the qualitative context-
-sensitivity, not raw recall.
+| Metric | Value |
+|---|---|
+| Recall@5 | 0.0592 |
+| Recall@10 | 0.0904 |
+| Recall@20 | 0.1298 |
+| NDCG@10 | 0.5005 |
 
-**Exp 4 — Synthetic context:** Negative result. Random occasion labels add noise;
-no recall improvement. Confirms ground-truth occasion signal would be needed.
+LLM experiment outcomes vs baseline:
 
-**Exp 5 — Dual-head tower:** Gate weight α converges to 0.986 (frozen semantic)
-and 0.889 (trainable) — optimizer heavily prefers the semantic head. Trainable
-variant achieves lowest val loss (2.7699 vs 2.8574 baseline), suggesting the
-linear semantic projection learns faster than the collaborative MLP.
+| Experiment | Key result |
+|---|---|
+| **Exp 1 — Item enrichment** | LLM descriptions 6.3× richer (65 vs 10 words). Marginal Recall gain (R@10: 0.0019 vs 0.0010 zero-shot) — sentence-transformer already captures most signal from item names alone |
+| **Exp 2 — Zero-shot narration** | Negative. Category precision@10: template=0.767, LLM=0.167. Zero-shot text profile can't replace a trained tower |
+| **Exp 3 — LLM reranker** | Context-aware reranking demonstrably shifts rankings (same user, different context → different top items). Aggregate Recall competitive with LightGBM at much higher API cost — value is qualitative context-sensitivity |
+| **Exp 4 — Synthetic context** | Negative. Synthetic occasion labels add noise; R@20 drops from 0.1298 → 0.1273. Ground-truth occasion signal would be needed |
+| **Exp 5 — Dual-head tower** | Gate weight α → 0.986 (frozen semantic) / 0.889 (trainable) — optimizer heavily prefers semantic head. Trainable variant achieves lowest val loss (2.7699 vs 2.8574 baseline) |
+
+Honest takeaway: off-the-shelf LLM integration patterns don't reliably improve retrieval metrics on this dataset. The experiments expose *where* LLMs add value (context-aware reranking) vs. where they don't (replacing learned representations).
 
 ---
 
