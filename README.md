@@ -1,5 +1,7 @@
 # Grocery Recommendation System — LLM Integration Research
 
+![CI](https://github.com/bchadburn/llm-recsys/actions/workflows/ci.yml/badge.svg)
+
 A research codebase exploring LLM integration patterns for grocery recommendation
 on the [Instacart dataset](https://www.kaggle.com/c/instacart-market-basket-analysis)
 (~2,000 users, ~5,000 items, ~1.5M interactions).
