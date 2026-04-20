@@ -20,10 +20,11 @@ Aggregate evaluation:
 """
 
 import json
-import numpy as np
-import faiss
-import torch
 from pathlib import Path
+
+import faiss
+import numpy as np
+import torch
 from dotenv import load_dotenv
 
 load_dotenv(Path.home() / '.env')
@@ -55,8 +56,8 @@ def load_data():
 
 
 def train_towers(user_features, item_features, interactions):
-    from main import train, build_faiss_index
     from data import InteractionDataset
+    from main import build_faiss_index, train
     print("  Training two-tower model...")
     user_tower, item_tower = train(user_features, item_features, interactions, InteractionDataset)
     index = build_faiss_index(item_tower, item_features)
@@ -78,8 +79,8 @@ def get_faiss_candidates(user_tower, faiss_index, user_features, uid: int):
 def build_lgbm_ranker(user_tower, item_tower, user_features, item_features,
                       interactions, up_stats):
     try:
-        from ranker import train_ranker, _embed_users, _embed_items
         from data_instacart import PRICE_SENS_IDX
+        from ranker import _embed_items, _embed_users, train_ranker
 
         user_embs = _embed_users(user_tower, user_features)
         item_embs = _embed_items(item_tower, item_features)
@@ -103,8 +104,8 @@ def get_lgbm_ranking(ranker_bundle, user_features, item_features,
     if ranker_bundle is None:
         return candidate_indices
     try:
-        from ranker import _make_features
         from data_instacart import PRICE_SENS_IDX
+        from ranker import _make_features
 
         ranker, user_embs, item_embs = ranker_bundle
         u_emb = user_embs[uid]
@@ -275,7 +276,7 @@ def diagnose_synthetic_context(user_features: np.ndarray, interactions: list):
       H3 — The occasion features are too small a fraction of the feature vector
            to influence learned embeddings
     """
-    from synthetic_context import inject_occasions, OCCASIONS, N_OCCASIONS
+    from synthetic_context import N_OCCASIONS, OCCASIONS, inject_occasions
 
     print("\n" + "="*72)
     print("  EXP 4 DIAGNOSTIC: WHY DID SYNTHETIC CONTEXT HURT?")
@@ -286,7 +287,6 @@ def diagnose_synthetic_context(user_features: np.ndarray, interactions: list):
 
     # H1: correlation between occasion fracs and purchase behaviour
     # Proxy: do users with high 'health_diet' fraction buy different items?
-    rng = np.random.default_rng(42)
     health_idx = OCCASIONS.index('health_diet')
     health_fracs = occ_fracs[:, health_idx]
 
@@ -305,8 +305,8 @@ def diagnose_synthetic_context(user_features: np.ndarray, interactions: list):
     low_set  = set(sorted(low_items,  key=lambda x: -low_items[x])[:20])
     overlap  = len(high_set & low_set)
 
-    print(f"\n  H1 — Occasion-purchase correlation")
-    print(f"  Top-20 items for high vs low 'health_diet' users:")
+    print("\n  H1 — Occasion-purchase correlation")
+    print("  Top-20 items for high vs low 'health_diet' users:")
     print(f"  Overlap: {overlap}/20  (20/20 = purely random, 0/20 = perfectly correlated)")
     print(f"  → {'CONFIRMED random' if overlap >= 15 else 'Some signal present'}: "
           f"occasion labels were assigned randomly per interaction, so occasion "
@@ -319,7 +319,7 @@ def diagnose_synthetic_context(user_features: np.ndarray, interactions: list):
     max_entropy = np.log(N_OCCASIONS)
     mean_frac_of_max = float(np.mean(per_user_entropy)) / max_entropy
 
-    print(f"\n  H2 — Feature variance (occasion fracs near-uniform?)")
+    print("\n  H2 — Feature variance (occasion fracs near-uniform?)")
     print(f"  Mean per-user entropy: {np.mean(per_user_entropy):.3f}  "
           f"(max uniform = {max_entropy:.3f})")
     print(f"  Mean fraction of max entropy: {mean_frac_of_max:.1%}")
@@ -334,7 +334,7 @@ def diagnose_synthetic_context(user_features: np.ndarray, interactions: list):
     aug_dim  = augmented.shape[1]
     occ_frac_of_total = N_OCCASIONS / aug_dim
 
-    print(f"\n  H3 — Feature dilution")
+    print("\n  H3 — Feature dilution")
     print(f"  Original user feature dim: {orig_dim}d")
     print(f"  Occasion features added:   {N_OCCASIONS}d")
     print(f"  Augmented dim:             {aug_dim}d")
@@ -343,25 +343,25 @@ def diagnose_synthetic_context(user_features: np.ndarray, interactions: list):
           f"of the input. The tower MLP would need to heavily up-weight these "
           f"dimensions to use them — unlikely without a targeted architecture change.")
 
-    print(f"\n  ROOT CAUSE SUMMARY")
-    print(f"  " + "-"*60)
-    print(f"  The synthetic occasions failed for all three reasons simultaneously:")
-    print(f"  1. Labels were random per interaction → zero ground-truth correlation")
-    print(f"  2. ~700 interactions/user → per-user fracs collapse to ~1/6 each")
-    print(f"     (law of large numbers erases any variance the random assignment created)")
-    print(f"  3. 6/55 = 11% of feature vector → diluted even if signal existed")
-    print(f"")
-    print(f"  The slight regression (R@20 -0.0025) is not from 'bad context' —")
-    print(f"  it's from adding 6 near-constant noise dimensions that slightly")
-    print(f"  destabilise the MLP's weight initialisation and optimisation landscape.")
-    print(f"")
-    print(f"  FIX: To test whether context injection CAN work, occasions need to be")
-    print(f"  derived from actual purchase signals, not assigned randomly. Options:")
-    print(f"  a) Use temporal data — time-of-day / day-of-week of actual orders")
-    print(f"  b) Use department mix — classify each order basket into an occasion")
-    print(f"     using a rule (>50% produce + protein → 'cooking'; >50% snacks → 'snacking')")
-    print(f"  c) Use LLM to label each historical basket with an occasion, then")
-    print(f"     aggregate per user — this produces correlated occasion fracs.")
+    print("\n  ROOT CAUSE SUMMARY")
+    print("  " + "-"*60)
+    print("  The synthetic occasions failed for all three reasons simultaneously:")
+    print("  1. Labels were random per interaction → zero ground-truth correlation")
+    print("  2. ~700 interactions/user → per-user fracs collapse to ~1/6 each")
+    print("     (law of large numbers erases any variance the random assignment created)")
+    print("  3. 6/55 = 11% of feature vector → diluted even if signal existed")
+    print("")
+    print("  The slight regression (R@20 -0.0025) is not from 'bad context' —")
+    print("  it's from adding 6 near-constant noise dimensions that slightly")
+    print("  destabilise the MLP's weight initialisation and optimisation landscape.")
+    print("")
+    print("  FIX: To test whether context injection CAN work, occasions need to be")
+    print("  derived from actual purchase signals, not assigned randomly. Options:")
+    print("  a) Use temporal data — time-of-day / day-of-week of actual orders")
+    print("  b) Use department mix — classify each order basket into an occasion")
+    print("     using a rule (>50% produce + protein → 'cooking'; >50% snacks → 'snacking')")
+    print("  c) Use LLM to label each historical basket with an occasion, then")
+    print("     aggregate per user — this produces correlated occasion fracs.")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -371,9 +371,11 @@ def main():
     print("  EXPERIMENT 3: CONTEXTUAL LLM RERANKER")
     print("="*72)
 
-    import anthropic
-    from data_instacart import DEPARTMENTS as dept_names
     from collections import Counter
+
+    import anthropic
+
+    from data_instacart import DEPARTMENTS as dept_names
 
     client = anthropic.Anthropic()
     user_features, item_features, items, interactions, user_archetypes, up_stats = load_data()

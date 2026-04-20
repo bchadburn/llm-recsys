@@ -18,9 +18,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-import numpy as np
-
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _normalize(name: str) -> str:
@@ -82,7 +79,6 @@ def score_single_response(
     candidate_names = [items[idx]["name"] for idx in candidate_indices]
     top_k_names     = [items[idx]["name"] for idx in ranking[:3] if idx < len(items)]
 
-    mentioned       = _reasoning_mentions(reasoning, candidate_names)
     non_candidate   = [
         n for n in _reasoning_mentions(reasoning, [i["name"] for i in items])
         if n not in [_normalize(c) for c in candidate_names]

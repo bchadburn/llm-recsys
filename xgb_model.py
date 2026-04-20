@@ -36,11 +36,11 @@ xgb_model.py — XGBoost direct ranking model (Approach C).
 # =============================================================================
 """
 
+from collections import defaultdict
 from datetime import datetime
+
 import numpy as np
 import xgboost as xgb
-from collections import defaultdict
-
 
 _UP_ZEROS = np.zeros(7, dtype=np.float32)
 
@@ -111,15 +111,6 @@ def train_xgb(user_features: np.ndarray, item_features: np.ndarray,
 
     n_pos = int(y.sum())
     n_neg = len(y) - n_pos
-
-    feat_names = (
-        ["user_id", "item_id"]
-        + [f"user_feat_{i}" for i in range(user_features.shape[1])]
-        + [f"item_feat_{i}" for i in range(item_features.shape[1])]
-        + ["up_purchase_count_norm", "up_reorder_rate", "up_user_order_frac",
-           "up_days_since_last_order", "up_orders_since_last_order",
-           "up_order_streak_norm", "up_order_rate"]
-    )
 
     model = xgb.XGBClassifier(
         n_estimators=200,

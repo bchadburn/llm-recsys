@@ -24,10 +24,10 @@ Run main.py with the data:
     python main.py --data-dir data/instacart/
 """
 
-import numpy as np
-import pandas as pd
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 
 # ── Department taxonomy ────────────────────────────────────────────────────────
 # Instacart has 21 departments (department_id 1–21 in the CSV).
@@ -445,7 +445,6 @@ def load_instacart(
     premium_share = dept_counts[:, premium_cols].sum(axis=1) / (totals.ravel() + 1e-8)
 
     # Avg basket size: mean items-per-order per user
-    order_idx_arr  = op_f['order_id'].values
     basket_sizes   = (
         op_f.groupby(['user_idx', 'order_id']).size()
         .groupby(level='user_idx').mean()

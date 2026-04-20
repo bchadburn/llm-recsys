@@ -26,18 +26,18 @@ Usage:
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Add repo root to path so sibling modules are importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from evals.prompt_registry import register_all
 from evals.description_evals import load_and_evaluate
+from evals.prompt_registry import register_all
 from evals.reranker_evals import (
-    score_single_response,
     aggregate_scores,
     context_sensitivity,
+    score_single_response,
 )
 
 RESULTS_DIR   = Path(__file__).parent / "results"
@@ -57,7 +57,7 @@ CONTEXTS      = [
 
 def save_results(results: dict) -> Path:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out = RESULTS_DIR / f"eval_{ts}.json"
     out.write_text(json.dumps(results, indent=2))
     return out
@@ -101,40 +101,38 @@ def run_reranker_eval(n_users: int, items: list[dict], user_features, item_featu
                       interactions: list) -> dict:
     print("\n── Reranker quality eval ────────────────────────────────────────")
 
+    from pathlib import Path as _Path
+
     import anthropic
-    import faiss
     import numpy as np
     import torch
     from dotenv import load_dotenv
-    from pathlib import Path as _Path
 
     load_dotenv(_Path.home() / ".env")
 
-    from main import train, build_faiss_index
     from lgbm_ranker import train_lgbm_ranker
-    from llm_reranker import (
-        get_faiss_candidates, get_lgbm_ranking, llm_rerank, user_profile_text,
-    )
+
     from eval import _reconstruct_val_interactions
-    from data_instacart import load_instacart
+    from llm_reranker import (
+        get_faiss_candidates,
+        llm_rerank,
+        user_profile_text,
+    )
+    from main import build_faiss_index, train
 
     client = anthropic.Anthropic()
 
-    # Load dept names (last N features of user_features are dept fractions)
-    raw = load_instacart(str(DATA_DIR), n_users=2000, n_items=5000, n_interactions=1500000)
-    dept_names = [d for d in raw[2][0].keys() if d not in
-                  ("name", "aisle", "category", "cat_idx", "price_tier", "popularity", "features")]
     # Fallback: derive dept names from item dicts
     all_depts = sorted({item.get("department", "unknown") for item in items})
 
     # Train two-tower
-    print(f"  Training two-tower model...")
+    print("  Training two-tower model...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     user_tower, item_tower = train(user_features, item_features, interactions, device=device)
     faiss_index = build_faiss_index(item_tower, item_features, device=device)
 
     # Train LightGBM ranker
-    ranker_bundle = train_lgbm_ranker(user_features, item_features, interactions)
+    train_lgbm_ranker(user_features, item_features, interactions)
 
     # Sample eval users with val purchases
     val_ints = _reconstruct_val_interactions(interactions, n_users=user_features.shape[0])
@@ -268,7 +266,7 @@ def main() -> None:
     print(f"  {len(items)} items | {len(interactions)} interactions")
 
     results: dict = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "prompt_versions": prompt_versions,
     }
 

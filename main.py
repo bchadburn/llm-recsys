@@ -15,16 +15,17 @@ Download Instacart data:
 
 import argparse
 from datetime import datetime
+
+import faiss
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, random_split
-import faiss
+from torch.utils.data import DataLoader
 
-from model import UserTower, ItemTower
-from ranker import train_ranker, show_reranking_comparison
 from eval import evaluate, print_eval_table
-from xgb_model import train_xgb, evaluate_xgb, print_xgb_eval
+from model import ItemTower, UserTower
+from ranker import show_reranking_comparison, train_ranker
+from xgb_model import evaluate_xgb, print_xgb_eval, train_xgb
 
 # ── Hyperparameters ────────────────────────────────────────────────────────────
 EMBED_DIM   = 64
@@ -324,15 +325,15 @@ def main():
 
     # ── Data loading ───────────────────────────────────────────────────────────
     if args.data_dir:
-        from data_instacart import (
-            load_instacart,
-            get_item_text_embeddings,
-            DEPARTMENTS as CATEGORIES,
-            ARCHETYPE_LABELS,
-            USER_PREFS_SLICE,
-            PRICE_SENS_IDX,
-        )
         from data import InteractionDataset
+        from data_instacart import (
+            ARCHETYPE_LABELS,
+            PRICE_SENS_IDX,
+            USER_PREFS_SLICE,
+            get_item_text_embeddings,
+            load_instacart,
+        )
+        from data_instacart import DEPARTMENTS as CATEGORIES
 
         print("=" * 72)
         print("  TWO-TOWER GROCERY RECOMMENDATION — INSTACART DATA")
@@ -347,13 +348,13 @@ def main():
         dataset_label_te = "text embeddings (384d, aisle+dept)"
     else:
         from data import (
+            ARCHETYPE_LABELS,
+            CATEGORIES,
+            PRICE_SENS_IDX,
+            USER_PREFS_SLICE,
+            InteractionDataset,
             generate_data,
             get_item_text_embeddings,
-            InteractionDataset,
-            CATEGORIES,
-            ARCHETYPE_LABELS,
-            USER_PREFS_SLICE,
-            PRICE_SENS_IDX,
         )
 
         print("=" * 72)

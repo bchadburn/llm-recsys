@@ -9,12 +9,13 @@ template baseline (plain "product_name - aisle - dept" descriptions).
 Caches API responses to item_descriptions_cache.json so re-runs are free.
 """
 
+import argparse
 import json
 import time
-import argparse
-import numpy as np
-import faiss
 from pathlib import Path
+
+import faiss
+import numpy as np
 from dotenv import load_dotenv
 
 load_dotenv(Path.home() / '.env')
@@ -188,7 +189,6 @@ def main():
     llm_results = zero_shot_evaluate(llm_index, user_features, interactions, st_model)
 
     # Summary
-    ks = (5, 10, 20)
     print("\n" + "="*72)
     print("  EXPERIMENT 1 SUMMARY")
     print("="*72)

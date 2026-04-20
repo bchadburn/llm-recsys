@@ -9,8 +9,9 @@ real purchase behavior, but establishes the training pipeline for future
 experiments where context IS meaningful.
 """
 
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 
 DATA_DIR = Path('data/instacart')
 
@@ -58,8 +59,8 @@ def inject_occasions(user_features: np.ndarray, interactions: list, seed: int = 
 
 
 def run_training(user_features, item_features, interactions, label: str):
-    from main import train, build_faiss_index
     from data import InteractionDataset
+    from main import build_faiss_index, train
     print(f"\n  Training two-tower ({label}, user_dim={user_features.shape[1]})...")
     user_tower, item_tower = train(user_features, item_features, interactions, InteractionDataset)
     index = build_faiss_index(item_tower, item_features)
@@ -92,7 +93,6 @@ def main():
     ctx_results = run_eval(user_tower_ctx, index_ctx, augmented_features, interactions)
 
     # Summary
-    ks = (5, 10, 20)
     print("\n" + "="*72)
     print("  EXPERIMENT 4 SUMMARY")
     print("="*72)
