@@ -9,14 +9,13 @@ Covers:
 """
 
 import json
-import numpy as np
-import importlib
 import sys
-import types
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -38,28 +37,27 @@ def _make_items(n: int) -> list[dict]:
 class TestUserNarrationCacheLookup(unittest.TestCase):
     """load_or_build_item_index must look up descriptions by enumerate index, not item['id']."""
 
-    def _build_cache(self, items: list[dict], tmp_path: Path) -> Path:
-        cache = {str(i): f"LLM desc for item {i}" for i in range(len(items))}
-        cache_file = tmp_path / "item_descriptions_cache.json"
-        cache_file.write_text(json.dumps(cache))
-        return cache_file
+    def _make_mock_st(self, n_items: int, emb_dim: int = 4) -> MagicMock:
+        mock_st = MagicMock()
+        mock_st.encode.return_value = np.random.rand(n_items, emb_dim).astype(np.float32)
+        return mock_st
 
-    def test_cache_lookup_by_index(self, tmp_path=None):
+    def test_cache_lookup_by_index(self):
         """All items resolved from cache using their enumerate index."""
-        import tempfile, os
+        import llm_user_narration
+
+        items = _make_items(5)
         with tempfile.TemporaryDirectory() as td:
-            tmp = Path(td)
-            items = _make_items(5)
-            cache_file = self._build_cache(items, tmp)
-            cache = json.loads(cache_file.read_text())
+            cache_file = Path(td) / "item_descriptions_cache.json"
+            cache = {str(i): f"LLM desc for item {i}" for i in range(5)}
+            cache_file.write_text(json.dumps(cache))
 
-            # Reproduce the fixed logic from load_or_build_item_index
-            texts = [
-                cache.get(str(i),
-                          f"{item['name']} - {item.get('aisle','?')} - {item.get('department','?')}")
-                for i, item in enumerate(items)
-            ]
+            mock_st = self._make_mock_st(len(items))
+            with patch.object(llm_user_narration, 'CACHE_FILE', cache_file), \
+                 patch('sentence_transformers.SentenceTransformer', return_value=mock_st):
+                llm_user_narration.load_or_build_item_index(items)
 
+            texts = mock_st.encode.call_args[0][0]
             self.assertEqual(len(texts), 5)
             for i in range(5):
                 self.assertEqual(texts[i], f"LLM desc for item {i}",
@@ -67,29 +65,45 @@ class TestUserNarrationCacheLookup(unittest.TestCase):
 
     def test_cache_miss_falls_back_to_template(self):
         """Items missing from cache fall back to template description."""
-        cache = {"0": "LLM desc for item 0"}  # only item 0 cached
+        import llm_user_narration
+
         items = _make_items(3)
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "item_descriptions_cache.json"
+            cache = {"0": "LLM desc for item 0"}  # only item 0 cached
+            cache_file.write_text(json.dumps(cache))
 
-        texts = [
-            cache.get(str(i),
-                      f"{item['name']} - {item.get('aisle','?')} - {item.get('department','?')}")
-            for i, item in enumerate(items)
-        ]
+            mock_st = self._make_mock_st(len(items))
+            with patch.object(llm_user_narration, 'CACHE_FILE', cache_file), \
+                 patch('sentence_transformers.SentenceTransformer', return_value=mock_st):
+                llm_user_narration.load_or_build_item_index(items)
 
-        self.assertEqual(texts[0], "LLM desc for item 0")
-        self.assertEqual(texts[1], "Item 1 - aisle-1 - dept-1")
-        self.assertEqual(texts[2], "Item 2 - aisle-2 - dept-2")
+            texts = mock_st.encode.call_args[0][0]
+            self.assertEqual(texts[0], "LLM desc for item 0")
+            self.assertEqual(texts[1], "Item 1 - aisle-1 - dept-1")
+            self.assertEqual(texts[2], "Item 2 - aisle-2 - dept-2")
 
     def test_no_item_id_key_required(self):
         """Lookup must not access item['id'] — items have no such key."""
+        import llm_user_narration
+
         items = _make_items(3)
-        cache = {str(i): f"desc {i}" for i in range(3)}
         for item in items:
             self.assertNotIn('id', item, "Test setup error: items should not have 'id' key")
 
-        # Should not raise KeyError
-        texts = [cache.get(str(i), item['name']) for i, item in enumerate(items)]
-        self.assertEqual(len(texts), 3)
+        with tempfile.TemporaryDirectory() as td:
+            cache_file = Path(td) / "item_descriptions_cache.json"
+            cache = {str(i): f"desc {i}" for i in range(3)}
+            cache_file.write_text(json.dumps(cache))
+
+            mock_st = self._make_mock_st(len(items))
+            with patch.object(llm_user_narration, 'CACHE_FILE', cache_file), \
+                 patch('sentence_transformers.SentenceTransformer', return_value=mock_st):
+                # Should not raise KeyError
+                llm_user_narration.load_or_build_item_index(items)
+
+            texts = mock_st.encode.call_args[0][0]
+            self.assertEqual(len(texts), 3)
 
 
 # ---------------------------------------------------------------------------
@@ -101,14 +115,16 @@ class TestItemEnrichmentDescriptions(unittest.TestCase):
 
     def test_no_llm_keys_by_index(self):
         """--no-llm path produces keys '0'..'n-1', matching enumerate convention."""
+        import llm_item_enrichment
+
         items = _make_items(4)
+        with tempfile.TemporaryDirectory() as td:
+            nonexistent = Path(td) / "no_cache.json"
+            with patch.object(llm_item_enrichment, 'CACHE_FILE', nonexistent):
+                result = llm_item_enrichment.generate_descriptions(items, use_llm=False)
 
-        # Reproduce the fixed no-llm path
-        template_descs = {str(i): f"{item['name']} - {item.get('aisle','?')} - {item.get('department','?')}"
-                          for i, item in enumerate(items)}
-
-        self.assertEqual(set(template_descs.keys()), {'0', '1', '2', '3'})
-        self.assertIn('Item 0', template_descs['0'])
+        self.assertEqual(set(result.keys()), {'0', '1', '2', '3'})
+        self.assertIn('Item 0', result['0'])
 
     def test_progress_counter_uses_loop_index(self):
         """Progress reporting should use the loop counter (idx), not the item's enumerate index."""
@@ -132,16 +148,18 @@ class TestItemEnrichmentDescriptions(unittest.TestCase):
 
     def test_embed_descriptions_uses_index(self):
         """embed_descriptions falls back to template for items missing from descriptions dict."""
+        import llm_item_enrichment
+
         items = _make_items(3)
         descriptions = {'0': 'enriched zero', '2': 'enriched two'}  # item 1 missing
 
-        def make_template(item: dict) -> str:
-            return f"{item['name']} - template"
+        mock_model = MagicMock()
+        mock_model.encode.return_value = np.random.rand(3, 4).astype(np.float32)
+        llm_item_enrichment.embed_descriptions(descriptions, items, mock_model)
 
-        texts = [descriptions.get(str(i), make_template(item)) for i, item in enumerate(items)]
-
+        texts = mock_model.encode.call_args[0][0]
         self.assertEqual(texts[0], 'enriched zero')
-        self.assertEqual(texts[1], 'Item 1 - template')
+        self.assertIn('Item 1', texts[1])
         self.assertEqual(texts[2], 'enriched two')
 
 
@@ -149,27 +167,27 @@ class TestItemEnrichmentDescriptions(unittest.TestCase):
 # llm_reranker — get_lgbm_ranking fallback behaviour
 # ---------------------------------------------------------------------------
 
+def _get_lgbm_ranking_with_mocks():
+    """Return get_lgbm_ranking with ranker/data_instacart pre-mocked in sys.modules."""
+    mock_ranker_mod = MagicMock()
+    mock_data_mod = MagicMock()
+    mock_data_mod.PRICE_SENS_IDX = 0
+    # Ensure these are in sys.modules before the function does its internal imports
+    sys.modules.setdefault('ranker', mock_ranker_mod)
+    sys.modules.setdefault('data_instacart', mock_data_mod)
+    from llm_reranker import get_lgbm_ranking
+    return get_lgbm_ranking, mock_ranker_mod, mock_data_mod
+
+
 class TestLgbmRankingFallback(unittest.TestCase):
     """get_lgbm_ranking must return FAISS order when ranker_bundle is None or raises."""
 
-    def _get_lgbm_ranking(self, ranker_bundle, user_features, item_features,
-                           up_stats, uid, candidate_indices):
-        """Inline copy of the fixed get_lgbm_ranking for isolated testing."""
-        if ranker_bundle is None:
-            return candidate_indices
-        try:
-            ranker, user_embs, item_embs = ranker_bundle
-            u_emb = user_embs[uid]
-            faiss_scores = item_embs[candidate_indices] @ u_emb
-            # Simplified: skip _make_features, just use faiss_scores as features
-            scores = ranker.predict(faiss_scores.reshape(-1, 1))
-            return candidate_indices[np.argsort(-scores)]
-        except Exception:
-            return candidate_indices
+    def setUp(self):
+        self.get_lgbm_ranking, self.mock_ranker_mod, _ = _get_lgbm_ranking_with_mocks()
 
     def test_none_bundle_returns_faiss_order(self):
         candidate_indices = np.array([3, 7, 1, 9, 0])
-        result = self._get_lgbm_ranking(
+        result = self.get_lgbm_ranking(
             None, None, None, None, 0, candidate_indices
         )
         np.testing.assert_array_equal(result, candidate_indices)
@@ -185,7 +203,9 @@ class TestLgbmRankingFallback(unittest.TestCase):
         item_features = np.random.rand(n_items, 3).astype(np.float32)
         candidate_indices = np.array([2, 5, 8, 1, 6])
 
-        result = self._get_lgbm_ranking(
+        self.mock_ranker_mod._make_features.return_value = np.ones((5, 3))
+
+        result = self.get_lgbm_ranking(
             (bad_ranker, user_embs, item_embs),
             user_features, item_features, {}, 0, candidate_indices
         )
@@ -199,11 +219,13 @@ class TestLgbmRankingFallback(unittest.TestCase):
         item_features = np.random.rand(n_items, 3).astype(np.float32)
         candidate_indices = np.array([2, 5, 8, 1, 6])
 
+        self.mock_ranker_mod._make_features.return_value = np.ones((5, 3))
+
         # Ranker that always scores in reverse order of input
         mock_ranker = MagicMock()
         mock_ranker.predict.side_effect = lambda x: np.arange(len(x), 0, -1, dtype=float)
 
-        result = self._get_lgbm_ranking(
+        result = self.get_lgbm_ranking(
             (mock_ranker, user_embs, item_embs),
             user_features, item_features, {}, 0, candidate_indices
         )
