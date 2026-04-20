@@ -41,12 +41,13 @@ ranker.py — LightGBM re-ranking stage for the two-tower grocery system.
 # =============================================================================
 """
 
-import numpy as np
-import torch
 import faiss
 import lightgbm as lgb
+import numpy as np
+import torch
 
-from data import CATEGORIES, PRICE_TIERS, PRICE_SENS_IDX as _DEFAULT_PRICE_SENS_IDX
+from data import CATEGORIES
+from data import PRICE_SENS_IDX as _DEFAULT_PRICE_SENS_IDX
 
 RETRIEVAL_K = 20   # candidates fetched from FAISS per query
 FINAL_K     = 10   # items shown in the side-by-side comparison
@@ -199,7 +200,7 @@ def train_ranker(user_tower, item_tower, index, user_features, item_features,
     print("\nTraining LightGBM lambdarank ranker...")
     print(f"  Train users    : {len(train_users)}")
     print(f"  Candidates/user: {RETRIEVAL_K}")
-    up_note = " (incl. 3 UP features)" if up_stats else ""
+    up_note = " (incl. 7 UP features)" if up_stats else ""
     print(f"  Feature dim    : {X.shape[1]}{up_note}  |  Total (u,i) pairs: {X.shape[0]}")
     booster = lgb.train(params, train_data, num_boost_round=100)
     print("  Ranker training complete.")

@@ -246,7 +246,7 @@ def load_instacart(
     is capped at n_interactions (randomly sampled) to keep epoch time tractable.
 
     Returns:
-        user_features:   np.ndarray [n_users, 47]
+        user_features:   np.ndarray [n_users, 49]
         item_features:   np.ndarray [n_items, 24]
         items:           list[dict] with keys: name, category, aisle, cat_idx,
                          price_tier, popularity, features

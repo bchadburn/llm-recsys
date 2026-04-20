@@ -37,7 +37,6 @@ SEED        = 42
 # ──────────────────────────────────────────────────────────────────────────────
 
 torch.manual_seed(SEED)
-np.random.seed(SEED)
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -244,49 +243,6 @@ def compare_inference(user_tower_oh, index_oh, user_tower_te, index_te,
             )
 
 
-# ── Production Notes ───────────────────────────────────────────────────────────
-
-PRODUCTION_NOTES = """
-================================================================================
-  WHERE TO ADD COMPLEXITY IN A PRODUCTION SYSTEM
-================================================================================
-
-  1. ID EMBEDDINGS (highest priority)
-     Add nn.Embedding(n_users, d) and nn.Embedding(n_items, d) tables.
-     Concatenate learned ID embeddings with hand-crafted feature vectors before
-     each tower MLP. This captures user/item-specific biases that feature
-     vectors alone cannot express.
-
-  2. TWO-STAGE RETRIEVAL
-     FAISS handles *recall* — retrieve a candidate set (top-100 to top-500).
-     A separate ranking stage (cross-encoder, LightGBM, or deep ranker)
-     re-ranks candidates using expensive pairwise features that are too costly
-     to compute at full catalog scale.
-
-  3. APPROXIMATE NEAREST NEIGHBOR AT SCALE
-     Above ~50k items, replace IndexFlatIP with:
-       - IndexHNSWFlat : graph-based, sub-ms retrieval at >99% recall
-       - IndexIVFPQ    : compressed, suits millions of items
-
-  4. FEATURE STORE
-     User features change on every purchase. A feature store (Redis, Feast,
-     Tecton) serves pre-computed user vectors at <10 ms latency.
-
-  5. HARD NEGATIVE MINING
-     In-batch negatives are mostly trivially easy (random unrelated items).
-     Hard negatives — items the user didn't buy but that scored highly in a
-     prior retrieval pass — dramatically improve recall@K at larger scales.
-
-  6. COLD-START FOR NEW ITEMS
-     New items have no interactions. Text embeddings (sentence-transformer or
-     LLM-generated descriptions) let you embed and index new items immediately.
-
-  7. ONLINE / INCREMENTAL LEARNING
-     Retrain the user tower hourly or on purchase triggers. Versioned model
-     checkpoints + blue/green FAISS index swaps prevent stale embeddings.
-
-================================================================================
-"""
 
 
 # ── Entry Point ────────────────────────────────────────────────────────────────
@@ -437,8 +393,6 @@ def main():
         categories=CATEGORIES,
         up_stats=up_stats,
     )
-
-    print(PRODUCTION_NOTES)
 
 
 if __name__ == "__main__":

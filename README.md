@@ -4,7 +4,7 @@
 
 A research codebase exploring LLM integration patterns for grocery recommendation
 on the [Instacart dataset](https://www.kaggle.com/c/instacart-market-basket-analysis)
-(~2,000 users, ~5,000 items, ~1.5M interactions).
+(full dataset: ~200k users, ~50k items; default sample: 5,000 users, 10,000 items).
 
 The core is a two-tower retrieval model (PyTorch + FAISS) with a LightGBM re-ranking
 stage. Five experiments layer in LLM capabilities on top of that foundation.

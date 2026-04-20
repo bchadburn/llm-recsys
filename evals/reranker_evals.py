@@ -81,7 +81,7 @@ def score_single_response(
 
     non_candidate   = [
         n for n in _reasoning_mentions(reasoning, [i["name"] for i in items])
-        if n not in [_normalize(c) for c in candidate_names]
+        if _normalize(n) not in [_normalize(c) for c in candidate_names]
     ]
     aligned         = any(
         _normalize(n) in _normalize(reasoning) for n in top_k_names

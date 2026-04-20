@@ -105,13 +105,11 @@ def run_reranker_eval(n_users: int, items: list[dict], user_features, item_featu
 
     import anthropic
     import numpy as np
-    import torch
     from dotenv import load_dotenv
 
     load_dotenv(_Path.home() / ".env")
 
-    from lgbm_ranker import train_lgbm_ranker
-
+    from data import InteractionDataset
     from eval import _reconstruct_val_interactions
     from llm_reranker import (
         get_faiss_candidates,
@@ -119,6 +117,7 @@ def run_reranker_eval(n_users: int, items: list[dict], user_features, item_featu
         user_profile_text,
     )
     from main import build_faiss_index, train
+    from ranker import train_ranker
 
     client = anthropic.Anthropic()
 
@@ -127,15 +126,14 @@ def run_reranker_eval(n_users: int, items: list[dict], user_features, item_featu
 
     # Train two-tower
     print("  Training two-tower model...")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    user_tower, item_tower = train(user_features, item_features, interactions, device=device)
-    faiss_index = build_faiss_index(item_tower, item_features, device=device)
+    user_tower, item_tower = train(user_features, item_features, interactions, InteractionDataset)
+    faiss_index = build_faiss_index(item_tower, item_features)
 
     # Train LightGBM ranker
-    train_lgbm_ranker(user_features, item_features, interactions)
+    train_ranker(user_tower, item_tower, faiss_index, user_features, item_features, items, interactions)
 
     # Sample eval users with val purchases
-    val_ints = _reconstruct_val_interactions(interactions, n_users=user_features.shape[0])
+    val_ints = _reconstruct_val_interactions(interactions)
     val_purchases: dict[int, set] = {}
     for uid, iid in val_ints:
         val_purchases.setdefault(uid, set()).add(iid)
@@ -157,12 +155,11 @@ def run_reranker_eval(n_users: int, items: list[dict], user_features, item_featu
 
         ctx_rankings = {}
         for ctx in CONTEXTS[1:]:
-            ctx_ranking, _ = llm_rerank(client, items, faiss_indices, profile, context=ctx)
+            ctx_ranking, reasoning = llm_rerank(client, items, faiss_indices, profile, context=ctx)
             ctx_rankings[ctx[:30]] = ctx_ranking
 
-            reranked, reasoning = llm_rerank(client, items, faiss_indices, profile, context=ctx)
             score = score_single_response(
-                ranking=reranked,
+                ranking=ctx_ranking,
                 reasoning=reasoning,
                 candidate_indices=list(faiss_indices),
                 items=items,
@@ -171,10 +168,9 @@ def run_reranker_eval(n_users: int, items: list[dict], user_features, item_featu
             all_scores.append(score)
 
         # No-context response scored separately
-        nc_reranked, nc_reasoning = llm_rerank(client, items, faiss_indices, profile, context=None)
         nc_score = score_single_response(
-            ranking=nc_reranked,
-            reasoning=nc_reasoning,
+            ranking=no_ctx_ranking,
+            reasoning="",
             candidate_indices=list(faiss_indices),
             items=items,
             faiss_ranking=list(faiss_indices),

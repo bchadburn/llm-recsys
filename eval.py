@@ -36,14 +36,13 @@ eval.py — Offline evaluation for the two-tower grocery recommendation system.
 # =============================================================================
 """
 
+import faiss
 import numpy as np
 import torch
-import faiss
-
 
 # ── Val-split reconstruction ──────────────────────────────────────────────────
 
-def _reconstruct_val_interactions(interactions: list, n_users: int, seed: int = 42) -> list:
+def _reconstruct_val_interactions(interactions: list, seed: int = 42) -> list:
     """
     Reproduce the interaction-level 20% held-out split from train() in main.py.
 
@@ -99,7 +98,7 @@ def evaluate(
         }
     """
     n_users = n_users or user_features.shape[0]
-    val_interactions = _reconstruct_val_interactions(interactions, n_users=n_users, seed=seed)
+    val_interactions = _reconstruct_val_interactions(interactions, seed=seed)
 
     # Build per-user ground-truth purchase sets from val interactions only
     val_purchases: dict[int, set] = {}
