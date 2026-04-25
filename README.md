@@ -1,11 +1,24 @@
 # Grocery Recommendation System — LLM Integration Research
 
-A research codebase exploring LLM integration patterns for grocery recommendation
-on the [Instacart dataset](https://www.kaggle.com/c/instacart-market-basket-analysis)
-(~2,000 users, ~5,000 items, ~1.5M interactions).
+Two-tower retrieval (PyTorch + FAISS) with LightGBM re-ranking, plus five experiments
+testing where LLM integration actually helps — and where it doesn't.
 
-The core is a two-tower retrieval model (PyTorch + FAISS) with a LightGBM re-ranking
-stage. Five experiments layer in LLM capabilities on top of that foundation.
+Dataset: [Instacart Market Basket Analysis](https://www.kaggle.com/c/instacart-market-basket-analysis)
+(~2,000 users, ~5,000 items, ~1.5M interactions). Synthetic data used by default.
+
+---
+
+## Quickstart
+
+```bash
+pip install -r requirements.txt
+
+# Synthetic data (no download needed)
+python main.py
+
+# Instacart data (download from Kaggle first — see DATASETS.md)
+python main.py --data-dir data/instacart/
+```
 
 ---
 
@@ -14,10 +27,8 @@ stage. Five experiments layer in LLM capabilities on top of that foundation.
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  RETRIEVAL (two-tower, InfoNCE loss)                            │
-│                                                                 │
-│  user features ──► UserTower ──► user_emb (64d) ──┐           │
-│  item features ──► ItemTower ──► item_emb (64d) ──┤           │
-│                                                    └► FAISS     │
+│  user features ──► UserTower ──► user_emb (64d) ──┐            │
+│  item features ──► ItemTower ──► item_emb (64d) ──┴──► FAISS   │
 └─────────────────────────────────────────────────────────────────┘
           │ top-20 candidates
           ▼
@@ -28,155 +39,113 @@ stage. Five experiments layer in LLM capabilities on top of that foundation.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## Experiments
-
-| Script | Pattern | Key question |
-|--------|---------|-------------|
-| `llm_item_enrichment.py` | Offline LLM content → richer embeddings | Do Claude item descriptions improve FAISS retrieval over template text? |
-| `llm_user_narration.py` | Zero-shot user profile → item retrieval | Can a natural language user profile replace a trained user tower? |
-| `llm_reranker.py` | FAISS candidates + context → Claude reranking | Does LLM reranking beat LightGBM? Does context shift rankings correctly? |
-| `synthetic_context.py` | Synthetic occasion injection → retrain | Does adding occasion labels to features improve two-tower performance? |
-| `exp5_dual_head.py` | Dual-head item tower with learned gate (α) | Are semantic embeddings destroyed by MLP training? Can a frozen head recover them? |
+See [TWO_TOWER_MODEL.md](TWO_TOWER_MODEL.md) for architecture details and production notes.
 
 ---
 
 ## Results
 
-Two-tower baseline (trained, 2,000 users, 80/20 split):
+Two-tower baseline (Instacart, 2,000 users, 80/20 split):
 
 | Metric | Value |
-|---|---|
+|--------|-------|
 | Recall@5 | 0.0592 |
 | Recall@10 | 0.0904 |
 | Recall@20 | 0.1298 |
 | NDCG@10 | 0.5005 |
 
-LLM experiment outcomes vs baseline:
+LLM experiment outcomes:
 
-| Experiment | Key result |
-|---|---|
-| **Exp 1 — Item enrichment** | LLM descriptions 6.3× richer (65 vs 10 words). Marginal Recall gain (R@10: 0.0019 vs 0.0010 zero-shot) — sentence-transformer already captures most signal from item names alone |
-| **Exp 2 — Zero-shot narration** | Negative. Category precision@10: template=0.767, LLM=0.167. Zero-shot text profile can't replace a trained tower |
-| **Exp 3 — LLM reranker** | Context-aware reranking demonstrably shifts rankings (same user, different context → different top items). Aggregate Recall competitive with LightGBM at much higher API cost — value is qualitative context-sensitivity |
-| **Exp 4 — Synthetic context** | Negative. Synthetic occasion labels add noise; R@20 drops from 0.1298 → 0.1273. Ground-truth occasion signal would be needed |
-| **Exp 5 — Dual-head tower** | Gate weight α → 0.986 (frozen semantic) / 0.889 (trainable) — optimizer heavily prefers semantic head. Trainable variant achieves lowest val loss (2.7699 vs 2.8574 baseline) |
+| Experiment | Result |
+|-----------|--------|
+| **Exp 1 — Item enrichment** | Marginal gain. LLM descriptions 6.3× richer but sentence-transformer already captures most signal from item names alone |
+| **Exp 2 — Zero-shot narration** | Negative. Category precision@10: template=0.767, LLM=0.167 — text profile can't replace a trained tower |
+| **Exp 3 — LLM reranker** | Context-aware reranking demonstrably shifts rankings (same user, different context → different top items). Recall competitive with LightGBM at much higher API cost |
+| **Exp 4 — Synthetic context** | Negative. Synthetic occasion labels add noise; R@20 drops 0.1298 → 0.1273 |
+| **Exp 5 — Dual-head tower** | Gate α → 0.986 (frozen) / 0.889 (trainable) — optimizer heavily prefers semantic head. Trainable variant achieves best val loss (2.7699 vs 2.8574 baseline) |
 
-Honest takeaway: off-the-shelf LLM integration patterns don't reliably improve retrieval metrics on this dataset. The experiments expose *where* LLMs add value (context-aware reranking) vs. where they don't (replacing learned representations).
-
----
-
-## Eval pipeline
-
-```
-evals/
-├── prompt_registry.py      Hash + version-track every prompt template
-├── description_evals.py    Model-free quality metrics for LLM descriptions
-├── reranker_evals.py       Reasoning alignment, hallucination rate, context sensitivity
-├── run_evals.py            CLI orchestrator — saves timestamped JSON results
-└── results/                Eval runs (gitignored)
-```
-
-```bash
-# Run description quality eval (no API calls — reads cached descriptions)
-uv run --with python-dotenv --with sentence-transformers --with faiss-cpu \
-    --with lightgbm --with xgboost --with torch \
-    python evals/run_evals.py --descriptions
-
-# Run reranker eval on 10 users (uses LLM API, ~40 calls)
-uv run --with anthropic --with python-dotenv --with faiss-cpu \
-    --with lightgbm --with xgboost --with torch \
-    python evals/run_evals.py --reranker --reranker-users 10
-
-# Compare results across runs
-python evals/run_evals.py --compare
-```
+**Takeaway:** LLMs add value for context-aware reranking, not for replacing learned retrieval representations.
 
 ---
 
-## Running experiments
+## Files
 
-```bash
-# Full overnight run
-bash run_overnight.sh > logs/orchestration.log 2>&1 &
-
-# Single experiment (no-LLM mode where supported)
-uv run --with anthropic --with sentence-transformers --with faiss-cpu \
-    --with python-dotenv --with lightgbm --with xgboost --with torch \
-    python llm_item_enrichment.py --no-llm
-```
-
----
-
-## Offline evaluation metrics
-
-**Recall@K** — of all items a user purchased (held-out 20%), what fraction appear
-in the top-K results? Low Recall@20 means the ranker works from an impoverished
-candidate set; items FAISS misses are invisible to every later stage.
-
-**NDCG@K** — normalized discounted cumulative gain. Penalises relevant items that
-appear lower in the ranked list. Distinguishes placing the best match at rank 1
-vs. rank 10; Recall alone cannot.
-
-Both metrics use the same deterministic 80/20 interaction-level split (`SEED=42`)
-reproduced from training.
+| File | Purpose |
+|------|---------|
+| `main.py` | Training pipeline (two-tower + FAISS + LightGBM) |
+| `model.py` | UserTower, ItemTower, DualHeadItemTower |
+| `ranker.py` | LightGBM lambdarank re-ranking stage |
+| `eval.py` | Recall@K / NDCG@K evaluation |
+| `data.py` / `data_instacart.py` | Synthetic / Instacart data loaders |
+| `xgb_model.py` | XGBoost direct ranker (Instacart only, Approach C) |
+| `llm_item_enrichment.py` | Exp 1 — Claude item descriptions → embeddings |
+| `llm_user_narration.py` | Exp 2 — Zero-shot user profile retrieval |
+| `llm_reranker.py` | Exp 3 — Context-aware LLM reranking |
+| `synthetic_context.py` | Exp 4 — Occasion injection + retrain |
+| `exp5_dual_head.py` | Exp 5 — Dual-head item tower with learned gate |
+| `generate_report.py` | Parse experiment logs → `overnight_report.md` |
+| `api/` | FastAPI inference service (see below) |
+| `evals/` | Eval pipeline for descriptions and reranker quality |
 
 ---
 
 ## Running the API
 
-A FastAPI service wraps the two-tower + LightGBM inference path. On startup it
-trains models on synthetic data (~30s); in production, swap in a checkpoint loader.
+FastAPI service wrapping two-tower + LightGBM inference. Trains on synthetic data at startup (~30s).
 
-**With Docker Compose (recommended):**
 ```bash
+# Local
+pip install -r requirements-api.txt
+uvicorn api.main:app --reload
+
+# Docker
 docker compose up
 ```
-
-**Locally:**
-```bash
-pip install fastapi "uvicorn[standard]"
-uvicorn api.main:app --reload
-```
-
-Endpoints:
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/health` | Liveness check |
-| `POST` | `/recommend` | Get top-K item recommendations for a user |
+| `POST` | `/recommend` | Top-K recommendations for a user |
 
-Example request:
 ```bash
 curl -s -X POST http://localhost:8000/recommend \
   -H "Content-Type: application/json" \
-  -d '{"user_id": 0, "top_k": 5}' | python -m json.tool
+  -d '{"user_id": 0, "top_k": 5}'
 ```
 
-Example response:
-```json
-{
-  "user_id": 0,
-  "top_k": 5,
-  "items": [
-    {"item_id": 42, "name": "Organic Spinach", "category": "produce", "price_tier": "budget", "score": 1.23},
-    ...
-  ],
-  "model": "two-tower+lightgbm"
-}
+Interactive docs: http://localhost:8000/docs
+
+---
+
+## Eval pipeline
+
+```bash
+# Description quality (no API calls)
+python evals/run_evals.py --descriptions
+
+# Reranker eval (~40 LLM API calls)
+python evals/run_evals.py --reranker --reranker-users 10
+
+# Compare runs
+python evals/run_evals.py --compare
 ```
 
-Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+---
+
+## Overnight run
+
+```bash
+bash run_overnight.sh > logs/orchestration.log 2>&1 &
+python generate_report.py  # produces overnight_report.md from logs
+```
 
 ---
 
 ## Stack
 
-- **PyTorch** — two-tower model training (GPU when available)
-- **FAISS** — exact inner-product vector search (`IndexFlatIP`)
-- **LightGBM** — lambdarank re-ranking stage
-- **FastAPI + uvicorn** — inference API server
-- **sentence-transformers** (`all-MiniLM-L6-v2`) — item text embeddings
-- **Claude Haiku** (`claude-haiku-4-5-20251001`) — descriptions, profiles, reranking
-- **uv** — dependency management; no virtualenv setup required
+- **PyTorch** — two-tower training (GPU when available)
+- **FAISS** `IndexFlatIP` — exact inner-product vector search
+- **LightGBM** — lambdarank re-ranking
+- **FastAPI + uvicorn** — inference API
+- **sentence-transformers** `all-MiniLM-L6-v2` — item text embeddings
+- **Claude Haiku** `claude-haiku-4-5-20251001` — descriptions, profiles, reranking
