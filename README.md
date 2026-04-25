@@ -126,11 +126,59 @@ reproduced from training.
 
 ---
 
+## Running the API
+
+A FastAPI service wraps the two-tower + LightGBM inference path. On startup it
+trains models on synthetic data (~30s); in production, swap in a checkpoint loader.
+
+**With Docker Compose (recommended):**
+```bash
+docker compose up
+```
+
+**Locally:**
+```bash
+pip install fastapi "uvicorn[standard]"
+uvicorn api.main:app --reload
+```
+
+Endpoints:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Liveness check |
+| `POST` | `/recommend` | Get top-K item recommendations for a user |
+
+Example request:
+```bash
+curl -s -X POST http://localhost:8000/recommend \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": 0, "top_k": 5}' | python -m json.tool
+```
+
+Example response:
+```json
+{
+  "user_id": 0,
+  "top_k": 5,
+  "items": [
+    {"item_id": 42, "name": "Organic Spinach", "category": "produce", "price_tier": "budget", "score": 1.23},
+    ...
+  ],
+  "model": "two-tower+lightgbm"
+}
+```
+
+Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+
+---
+
 ## Stack
 
 - **PyTorch** — two-tower model training (GPU when available)
 - **FAISS** — exact inner-product vector search (`IndexFlatIP`)
 - **LightGBM** — lambdarank re-ranking stage
+- **FastAPI + uvicorn** — inference API server
 - **sentence-transformers** (`all-MiniLM-L6-v2`) — item text embeddings
 - **Claude Haiku** (`claude-haiku-4-5-20251001`) — descriptions, profiles, reranking
 - **uv** — dependency management; no virtualenv setup required
